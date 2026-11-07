@@ -95,6 +95,7 @@ jobs:
         run: sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36"
 
       - name: Build and sign Android release
+        id: android_release
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -107,10 +108,12 @@ jobs:
                 -z "${ANDROID_KEYSTORE_PASSWORD:-}" ||
                 -z "${ANDROID_KEY_ALIAS:-}" ||
                 -z "${ANDROID_KEY_PASSWORD:-}" ]]; then
-            echo "::error::Configure os secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS e ANDROID_KEY_PASSWORD no GitHub."
-            exit 1
+            echo "::warning::O APK não foi gerado. Configure os secrets de assinatura para publicar atualizações Android."
+            echo "apk_built=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          echo "apk_built=true" >> "$GITHUB_OUTPUT"
           trap 'rm -f apk/release-signing.jks apk/release-signing.properties' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > apk/release-signing.jks
           chmod 600 apk/release-signing.jks
@@ -128,6 +131,7 @@ jobs:
           cp apk/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/GranaZen.apk"
 
       - name: Validate and prepare Android update
+        if: steps.android_release.outputs.apk_built == 'true'
         run: |
           if [[ -f "$RUNNER_TEMP/current-update/GranaZen.apk" ]]; then
             node scripts/publish-android-update.mjs \
@@ -141,6 +145,7 @@ jobs:
           fi
 
       - name: Save published APK as the next validation baseline
+        if: steps.android_release.outputs.apk_built == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
