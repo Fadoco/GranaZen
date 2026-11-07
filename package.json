@@ -2,18 +2,26 @@
   "name": "granazen",
   "private": true,
   "version": "0.1.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:pages": "tsc -b && vite build --base=/GranaZen/ --outDir docs",
     "build:android": "npm run build && npx cap sync android && cd apk && gradlew.bat assembleDebug",
+    "build:android:release": "npm run build && npx cap sync android && cd apk && gradlew.bat assembleRelease",
     "sync:android": "npm run build && npx cap sync android",
     "open:android": "npx cap open android",
+    "test:finance": "node --test scripts/finance-utils.test.mjs scripts/statement-import.test.mjs",
+    "test:release-version": "node --test scripts/check-android-release-version.test.mjs scripts/prepare-android-release.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.3",
     "@capacitor/core": "^8.5.3",
+    "@capacitor/local-notifications": "^8.0.0",
     "lucide-react": "^1.46.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

@@ -3,6 +3,8 @@ dist/
 apk/.gradle/
 apk/build/
 apk/app/build/
+apk/release-signing.jks
+apk/release-signing.properties
 .vite/
 *.log
 .env

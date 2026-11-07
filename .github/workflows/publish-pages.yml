@@ -1,0 +1,172 @@
+name: Publish GranaZen and Android update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-pages.yml
+      - apk/**
+      - capacitor.config.ts
+      - index.html
+      - public/**
+      - README.md
+      - package.json
+      - package-lock.json
+      - scripts/**
+      - src/**
+      - tsconfig*.json
+      - vite.config.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: granazen-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Test Android release tooling
+        run: |
+          npm ci
+          npm run test:release-version
+
+      - name: Preserve the currently published update
+        run: |
+          mkdir -p "$RUNNER_TEMP/current-update"
+          if [[ -f docs/updates/GranaZen.apk && -f docs/updates/version.json ]]; then
+            cp docs/updates/GranaZen.apk docs/updates/version.json "$RUNNER_TEMP/current-update/"
+          fi
+
+      - name: Prepare the next Android version
+        run: |
+          if [[ -f "$RUNNER_TEMP/current-update/version.json" ]]; then
+            node scripts/prepare-android-release.mjs apk/app/build.gradle "$RUNNER_TEMP/current-update/version.json"
+          else
+            node scripts/prepare-android-release.mjs apk/app/build.gradle -
+          fi
+          node scripts/check-android-release-version.mjs
+
+      - name: Build GitHub Pages site
+        run: npm run build:pages
+
+      - name: Restore current update as the release baseline
+        run: |
+          if [[ -f "$RUNNER_TEMP/current-update/GranaZen.apk" ]]; then
+            mkdir -p docs/updates
+            cp "$RUNNER_TEMP/current-update/"* docs/updates/
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platform-tools" "build-tools;36.0.0" "platforms;android-36"
+
+      - name: Build and sign Android release
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${ANDROID_KEYSTORE_BASE64:-}" ||
+                -z "${ANDROID_KEYSTORE_PASSWORD:-}" ||
+                -z "${ANDROID_KEY_ALIAS:-}" ||
+                -z "${ANDROID_KEY_PASSWORD:-}" ]]; then
+            echo "::error::Configure os secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS e ANDROID_KEY_PASSWORD no GitHub."
+            exit 1
+          fi
+
+          trap 'rm -f apk/release-signing.jks apk/release-signing.properties' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > apk/release-signing.jks
+          chmod 600 apk/release-signing.jks
+          printf 'storeFile=release-signing.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" \
+            > apk/release-signing.properties
+          chmod 600 apk/release-signing.properties
+
+          npm run build
+          npx cap sync android
+          (
+            cd apk
+            bash ./gradlew --no-daemon assembleRelease
+          )
+          cp apk/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/GranaZen.apk"
+
+      - name: Validate and prepare Android update
+        run: |
+          if [[ -f "$RUNNER_TEMP/current-update/GranaZen.apk" ]]; then
+            node scripts/publish-android-update.mjs \
+              "$RUNNER_TEMP/GranaZen.apk" \
+              "$RUNNER_TEMP/current-update/GranaZen.apk" \
+              "$RUNNER_TEMP/current-update/version.json" \
+              docs/updates
+          else
+            node scripts/publish-android-update.mjs \
+              "$RUNNER_TEMP/GranaZen.apk" - - docs/updates
+          fi
+
+      - name: Save published APK as the next validation baseline
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/updates/GranaZen.apk docs/updates/version.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish Android update"
+            git push origin HEAD:main
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

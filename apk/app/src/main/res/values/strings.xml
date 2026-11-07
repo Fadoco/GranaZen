@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">GranaZen</string>
+    <string name="title_activity_main">GranaZen</string>
+    <string name="package_name">com.fadoco.granazen</string>
+    <string name="custom_url_scheme">com.fadoco.granazen</string>
+</resources>
