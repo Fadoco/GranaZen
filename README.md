@@ -61,7 +61,7 @@ O painel destaca contas vencidas e as que vencem nos próximos sete dias. Na ver
 2. No Android, abra o arquivo baixado e permita a instalação desta fonte, se o sistema solicitar.
 3. Confirme a instalação. Para atualizações futuras, instale os APKs publicados pelo mesmo projeto.
 
-O Android pode mostrar um aviso por se tratar de uma instalação fora da Play Store. Baixe o arquivo apenas deste repositório oficial. O app também verifica atualizações publicadas no GitHub Pages.
+O Android pode mostrar um aviso por se tratar de uma instalação fora da Play Store. Baixe o arquivo apenas deste repositório oficial. No app Android, a seção **Mais** mostra a versão instalada e permite verificar atualizações; quando uma nova versão é detectada, aparece um aviso na tela com a opção de baixar e instalar.
 
 ## Privacidade e armazenamento
 
@@ -70,55 +70,6 @@ O Android pode mostrar um aviso por se tratar de uma instalação fora da Play S
 - O GranaZen não se conecta a instituições financeiras; a importação é feita somente a partir de arquivos escolhidos pelo usuário.
 - Apagar os dados do app ou desinstalá-lo pode remover os dados locais. Exporte um backup antes de trocar ou restaurar o aparelho.
 
-## Desenvolvimento
+## Documentação detalhada
 
-### Requisitos
-
-- Node.js 22.18 ou superior
-- npm
-- Android Studio e Android SDK para compilar o APK localmente
-
-### Executar e validar
-
-```bash
-npm install
-npm run dev
-npm run test:finance
-npm run test:release-version
-npm run build
-```
-
-### Gerar APK de desenvolvimento
-
-```bash
-npm run build:android
-```
-
-O APK de desenvolvimento é criado em `apk/app/build/outputs/apk/debug/app-debug.apk`.
-
-## Publicação e atualizações Android
-
-O workflow em `.github/workflows/publish-pages.yml` é acionado quando alterações chegam à branch `main`. Ele publica a versão web e, com a assinatura Android configurada, gera um novo APK assinado, aumenta automaticamente a versão e atualiza o manifesto no GitHub Pages. No Android, o app avisa quando há uma nova versão para baixar e instalar.
-
-Para habilitar a publicação:
-
-1. No GitHub, habilite **Settings → Pages → Build and deployment → GitHub Actions**.
-2. Crie uma chave de assinatura Android exclusiva para o GranaZen e guarde uma cópia segura fora do repositório:
-
-   ```powershell
-   keytool -genkeypair -v -keystore apk\release-signing.jks -alias granazen -keyalg RSA -keysize 2048 -validity 10000
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes('apk\release-signing.jks')) | Set-Clipboard
-   ```
-
-3. Configure estes **Actions secrets** no repositório:
-   - `ANDROID_KEYSTORE_BASE64`
-   - `ANDROID_KEYSTORE_PASSWORD`
-   - `ANDROID_KEY_ALIAS`
-   - `ANDROID_KEY_PASSWORD`
-4. Envie as alterações para `main` ou execute o workflow manualmente. A versão Android é incrementada automaticamente com base no último APK publicado.
-
-Preserve a mesma chave de assinatura para todas as versões; sem ela, o Android não permite atualizar a instalação existente. Nunca envie o keystore ou as senhas para o Git.
-
-## Tecnologias
-
-React · TypeScript · Vite · Capacitor · Android
+Para entender as funcionalidades, o visual, a arquitetura e a manutenção do projeto, consulte o [guia técnico do GranaZen](./docs/GUIA_TECNICO_GRANAZEN.md).

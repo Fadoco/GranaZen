@@ -49,6 +49,7 @@ import {
 import {
   checkForAndroidUpdate,
   downloadAndroidUpdate,
+  getInstalledAndroidAppVersion,
   installDownloadedAndroidUpdate,
   isAndroidApp,
   type AndroidUpdate,
@@ -492,7 +493,9 @@ function App() {
   const [movementTab, setMovementTab] = useState<'expenses' | 'income'>('expenses')
   const [androidUpdate, setAndroidUpdate] = useState<AndroidUpdate | null>(null)
   const [isUpdatePromptOpen, setIsUpdatePromptOpen] = useState(false)
-  const [isCheckingAndroidUpdate, setIsCheckingAndroidUpdate] = useState(false)
+  const [installedAndroidAppVersion, setInstalledAndroidAppVersion] = useState('')
+  const [installedAndroidAppVersionError, setInstalledAndroidAppVersionError] = useState('')
+  const [isCheckingAndroidUpdate, setIsCheckingAndroidUpdate] = useState(isAndroidApp())
   const [isDownloadingAndroidUpdate, setIsDownloadingAndroidUpdate] = useState(false)
   const [hasDownloadedAndroidUpdate, setHasDownloadedAndroidUpdate] = useState(false)
   const [androidUpdateStatus, setAndroidUpdateStatus] = useState('')
@@ -675,16 +678,30 @@ function App() {
 
     let disposed = false
     let lastCheck = 0
+    void getInstalledAndroidAppVersion().then((version) => {
+      if (!disposed) {
+        setInstalledAndroidAppVersion(version)
+        setInstalledAndroidAppVersionError('')
+      }
+    }).catch((error: unknown) => {
+      console.error('Não foi possível identificar a versão instalada do GranaZen.', error)
+      if (!disposed) {
+        setInstalledAndroidAppVersion('')
+        setInstalledAndroidAppVersionError('Não foi possível identificar a versão instalada.')
+      }
+    })
+
     const checkForUpdate = async (force = false) => {
       if (!force && Date.now() - lastCheck < 6 * 60 * 60 * 1000) return
       lastCheck = Date.now()
+      setIsCheckingAndroidUpdate(true)
       try {
         const update = await checkForAndroidUpdate()
         if (disposed) return
         setAndroidUpdateError('')
         setAndroidUpdate(update)
         setHasDownloadedAndroidUpdate(false)
-        setAndroidUpdateStatus('')
+        setAndroidUpdateStatus(update ? '' : 'Você já está usando a versão mais recente.')
         setIsUpdatePromptOpen(Boolean(update && dismissedUpdateVersion.current !== update.version))
       } catch (error) {
         if (!disposed) setAndroidUpdateError(error instanceof Error ? error.message : 'Não foi possível verificar atualizações.')
@@ -708,13 +725,17 @@ function App() {
     setIsCheckingAndroidUpdate(true)
     setAndroidUpdateError('')
     try {
+      const installedVersion = await getInstalledAndroidAppVersion()
       const update = await checkForAndroidUpdate()
+      setInstalledAndroidAppVersion(installedVersion)
+      setInstalledAndroidAppVersionError('')
       setAndroidUpdate(update)
       setHasDownloadedAndroidUpdate(false)
       setAndroidUpdateStatus('')
       setIsUpdatePromptOpen(Boolean(update))
       if (!update) setAndroidUpdateStatus('Você já está usando a versão mais recente.')
     } catch (error) {
+      console.error('Não foi possível verificar atualizações do GranaZen.', error)
       setAndroidUpdateError(error instanceof Error ? error.message : 'Não foi possível verificar atualizações.')
     } finally {
       setIsCheckingAndroidUpdate(false)
@@ -1877,6 +1898,38 @@ function App() {
         {statementStatus && <p className="backup-status" role="status">{statementStatus}</p>}
         {statementPreview.length > 0 && <div className="statement-review"><p>{statementSelection.filter(Boolean).length} de {statementPreview.length} itens selecionados. Itens possivelmente duplicados vêm desmarcados.</p><div className="finance-settings-list">{statementPreview.map((entry, index) => <label className="statement-row" key={`${entry.date}-${entry.name}-${index}`}><input type="checkbox" checked={statementSelection[index]} onChange={(event) => setStatementSelection((current) => current.map((selected, itemIndex) => itemIndex === index ? event.target.checked : selected))} /><span><strong>{entry.name}</strong><small>{formatMovementDate(entry.date)} · {entry.category}</small></span><strong>{entry.kind === 'expense' ? '−' : '+'}{displayCurrency(entry.amount)}</strong></label>)}</div><div className="profile-form-actions"><button type="button" className="primary-button" onClick={importSelectedStatementEntries}><Check size={16} /> Importar selecionados</button></div></div>}
       </section>
+      {isAndroidApp() && (
+        <section className="panel preferences-card app-update-settings" aria-live="polite">
+          <div className="preferences-card-heading">
+            <span className="eyebrow">ATUALIZAÇÕES</span>
+            <h2>Atualização do aplicativo</h2>
+            <p>O GranaZen verifica atualizações automaticamente ao abrir e quando você volta ao aplicativo.</p>
+          </div>
+          <div className="app-update-version">
+            <span>Versão instalada</span>
+            <strong>{installedAndroidAppVersion || (installedAndroidAppVersionError ? 'Indisponível' : 'Verificando…')}</strong>
+          </div>
+          {androidUpdate && (
+            <div className="app-update-available">
+              <p><strong>Versão {androidUpdate.version} disponível.</strong> Baixe e instale para atualizar o GranaZen.</p>
+              {androidUpdate.notes && <details className="update-prompt-notes"><summary>O que mudou nesta versão</summary><p>{androidUpdate.notes}</p></details>}
+              <button className="primary-button app-update-action" type="button" onClick={() => void installAndroidUpdate()} disabled={isDownloadingAndroidUpdate}>
+                <Download size={16} />
+                {isDownloadingAndroidUpdate ? 'Baixando atualização…' : hasDownloadedAndroidUpdate ? 'Instalar atualização' : 'Atualizar agora'}
+              </button>
+            </div>
+          )}
+          {installedAndroidAppVersionError && <p className="update-error" role="alert">{installedAndroidAppVersionError}</p>}
+          {androidUpdateStatus && <p className="backup-status" role="status">{androidUpdateStatus}</p>}
+          {androidUpdateError && <p className="update-error" role="alert">{androidUpdateError}</p>}
+          {!androidUpdate && (
+            <button className="secondary-button app-update-action" type="button" onClick={() => void checkAndroidUpdateManually()} disabled={isCheckingAndroidUpdate}>
+              <Download size={16} />
+              {isCheckingAndroidUpdate ? 'Verificando atualização…' : 'Verificar atualização'}
+            </button>
+          )}
+        </section>
+      )}
       <section className="panel preferences-card">
         <div className="preferences-card-heading"><span className="eyebrow">LEMBRETES</span><h2>{supportsNativeReminders() ? 'Notificações no Android' : 'Notificações do navegador'}</h2><p>{supportsNativeReminders() ? 'Receba um aviso um dia antes do vencimento, mesmo com o app fechado. O Android pode ajustar o horário de entrega conforme as configurações de bateria e alarmes.' : 'Quando o navegador oferecer suporte, o GranaZen pode avisar ao abrir o app sobre contas vencidas ou próximas do vencimento. Isso não agenda alarmes quando o app está fechado.'}</p></div>
         {notificationPermission === 'unsupported' ? <p className="backup-warning">Notificações do sistema não são compatíveis neste ambiente.</p> : notificationPermission === 'granted' ? <p className="backup-status">Permissão concedida. {supportsNativeReminders() ? 'Os avisos de vencimento estão programados para contas próximas.' : 'Os lembretes aparecem quando você abre o app; alarmes quando ele está fechado não são suportados.'}</p> : <button className="secondary-button" type="button" onClick={() => void requestReminderNotifications()} disabled={notificationPermission === 'denied'}><Bell size={16} /> {notificationPermission === 'denied' ? 'Permissão bloqueada nas configurações do aparelho' : 'Permitir notificações neste aparelho'}</button>}
@@ -1987,16 +2040,6 @@ function App() {
             <div><span className="eyebrow">{activeSection === 'mais' ? 'DEIXE DO SEU JEITO' : activeSection === 'movimentos' ? 'CONTROLE DO DIA A DIA' : activeSection === 'historico' ? 'VISÃO AO LONGO DO TEMPO' : activeSection === 'dividas' ? 'CONTAS E COMPROMISSOS' : activeSection === 'contas' ? 'ORGANIZAÇÃO FINANCEIRA' : activeSection === 'calendario' ? 'AGENDA FINANCEIRA' : todayLabel}</span><h1>{sectionTitles[activeSection]}</h1><p>{activeSection === 'mais' ? 'Ajuste o visual e a leitura do seu aplicativo.' : activeSection === 'movimentos' ? 'Anote gastos rápidos e todo dinheiro que entrar.' : activeSection === 'historico' ? 'Acompanhe tudo que aconteceu com seu dinheiro ao longo do tempo.' : activeSection === 'dividas' ? 'Acompanhe vencimentos, pagamentos e contas recorrentes.' : activeSection === 'contas' ? 'Veja seus compromissos financeiros em um só lugar.' : activeSection === 'calendario' ? 'Consulte contas, gastos e recebimentos por data.' : 'Um resumo claro para você cuidar bem do seu dinheiro.'}</p></div>
             {activeSection !== 'mais' && activeSection !== 'contas' && activeSection !== 'historico' && activeSection !== 'calendario' && <button className="primary-button" onClick={() => activeSection === 'dividas' ? openNewDebtForm() : openNewMovementForm('expense')}><Plus size={18} /> {activeSection === 'dividas' ? 'Nova dívida' : activeSection === 'movimentos' ? 'Novo gasto' : 'Novo lançamento'}</button>}
           </div>
-          {isAndroidApp() && (
-            <div className="update-check-row">
-              <span>{androidUpdateStatus || 'O GranaZen verifica atualizações automaticamente.'}</span>
-              <button type="button" onClick={() => void checkAndroidUpdateManually()} disabled={isCheckingAndroidUpdate}>
-                {isCheckingAndroidUpdate ? 'Verificando…' : 'Verificar atualização'}
-              </button>
-            </div>
-          )}
-          {isAndroidApp() && androidUpdateError && <p className="update-error" role="alert">{androidUpdateError}</p>}
-
           {activeSection === 'mais' ? (
             renderPreferences()
           ) : activeSection === 'calendario' ? (
@@ -2247,11 +2290,11 @@ function App() {
 
         {isAndroidApp() && androidUpdate && isUpdatePromptOpen && (
           <div className="update-prompt-backdrop" role="presentation">
-            <section className="update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
+            <section className="update-prompt" role="alertdialog" aria-modal="true" aria-labelledby="update-prompt-title" aria-describedby="update-prompt-description">
               <div className="update-prompt-icon"><Download size={26} /></div>
               <span className="eyebrow">ATUALIZAÇÃO DISPONÍVEL</span>
               <h2 id="update-prompt-title">Nova versão do GranaZen</h2>
-              <p>A versão <strong>{androidUpdate.version}</strong> está disponível para baixar e instalar.</p>
+              <p id="update-prompt-description">A versão <strong>{androidUpdate.version}</strong> está disponível para baixar e instalar.</p>
               {androidUpdate.notes && <details className="update-prompt-notes"><summary>O que mudou nesta versão</summary><p>{androidUpdate.notes}</p></details>}
               {androidUpdateStatus && <p className="update-prompt-status" role="status">{androidUpdateStatus}</p>}
               {androidUpdateError && <p className="update-prompt-error" role="alert">{androidUpdateError}</p>}
