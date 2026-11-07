@@ -1,0 +1,10 @@
+node_modules/
+dist/
+apk/.gradle/
+apk/build/
+apk/app/build/
+.vite/
+*.log
+.env
+.env.*
+!.env.example
