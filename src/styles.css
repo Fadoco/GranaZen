@@ -708,7 +708,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .history-empty-state { padding: 30px 12px 24px; }
   .history-empty-state > strong { font-size: 13px; }
   .history-empty-state > p { font-size: 11px; line-height: 1.5; }
-  .mobile-nav { min-height: calc(69px + env(safe-area-inset-bottom)); grid-template-columns: repeat(8, minmax(0, 1fr)); padding: 6px 5px calc(7px + env(safe-area-inset-bottom)); }
+  .mobile-nav { min-height: calc(69px + env(safe-area-inset-bottom)); grid-template-columns: repeat(7, minmax(0, 1fr)); padding: 6px 5px calc(7px + env(safe-area-inset-bottom)); }
   .mobile-nav-item { gap: 4px; font-size: 7px; white-space: normal; line-height: 1.15; }
   .mobile-nav-item svg { width: 19px; height: 19px; }
 }
@@ -859,7 +859,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .backup-actions .analysis-report-button { grid-column: 1 / -1; }
 }
 @media (max-width: 700px) {
-  .mobile-nav { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .mobile-nav { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 }
 button, input, select, textarea { accent-color: var(--accent-color); }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {

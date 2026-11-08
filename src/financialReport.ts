@@ -36,18 +36,36 @@ export type FinancialAnalysisInput = {
 export type FinancialAnalysisChange = {
   id: string
   action: 'updated' | 'added' | 'removed'
-  before: Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId'> | null
-  after: Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId'> | null
+  before: Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId' | 'sourceId'> | null
+  after: Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId' | 'sourceId'> | null
+}
+
+export type FinancialAnalysisWalletChange = {
+  id: string
+  name: string
+  before: number
+  after: number
+}
+
+export type FinancialBalanceReconciliation = {
+  asOf: string
+  statementClosingBalance: number
+  userReportedCurrentBalance: number
+  difference: number
+  note: string
 }
 
 export type FinancialAnalysisProposal = {
   movements: FinancialReportMovement[]
   changes: FinancialAnalysisChange[]
+  wallets: FinancialReportWallet[]
+  walletChanges: FinancialAnalysisWalletChange[]
+  balanceReconciliation?: FinancialBalanceReconciliation
   newExpenseCategories: string[]
 }
 
-type EditableMovementFields = Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId'>
-const editableMovementFields = ['kind', 'category', 'name', 'amount', 'date', 'notes', 'walletId'] as const
+type EditableMovementFields = Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId' | 'sourceId'>
+const editableMovementFields = ['kind', 'category', 'name', 'amount', 'date', 'notes', 'walletId', 'sourceId'] as const
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -57,7 +75,7 @@ export const prepareFinancialAnalysisProposal = (
   currentMovements: FinancialReportMovement[],
   existingExpenseCategories: string[],
   currentCustomCategories: string[],
-  currentWalletIds?: string[],
+  currentWallets?: FinancialReportWallet[],
 ): FinancialAnalysisProposal => {
   if (!isRecord(value) || value.app !== 'GranaZen' || value.reportType !== 'financial-analysis' ||
       value.formatVersion !== 1 || !Array.isArray(value.movements)) {
@@ -65,8 +83,10 @@ export const prepareFinancialAnalysisProposal = (
   }
 
   const currentById = new Map(currentMovements.map((movement) => [movement.id, movement]))
+  const currentWalletById = new Map((currentWallets ?? []).map((wallet) => [wallet.id, wallet]))
   const proposedIds = new Set<string>()
   const updates = new Map<string, EditableMovementFields>()
+  const walletUpdates = new Map<string, FinancialReportWallet>()
   const additions: FinancialReportMovement[] = []
   const newExpenseCategories = new Set<string>()
   const knownCategories = new Set([...existingExpenseCategories, ...currentCustomCategories])
@@ -80,6 +100,26 @@ export const prepareFinancialAnalysisProposal = (
     if (!currentById.has(id)) throw new Error(`O movimento ${id} não existe nos dados atuais e não pode ser removido.`)
   }
 
+  let balanceReconciliation: FinancialBalanceReconciliation | undefined
+  if (value.balanceReconciliation !== undefined) {
+    if (!isRecord(value.balanceReconciliation) || typeof value.balanceReconciliation.asOf !== 'string' ||
+        typeof value.balanceReconciliation.statementClosingBalance !== 'number' ||
+        typeof value.balanceReconciliation.userReportedCurrentBalance !== 'number' ||
+        typeof value.balanceReconciliation.difference !== 'number' ||
+        typeof value.balanceReconciliation.note !== 'string' ||
+        ![value.balanceReconciliation.statementClosingBalance, value.balanceReconciliation.userReportedCurrentBalance,
+          value.balanceReconciliation.difference].every(Number.isFinite)) {
+      throw new Error('Os dados de conferência do saldo estão inválidos.')
+    }
+    balanceReconciliation = {
+      asOf: value.balanceReconciliation.asOf,
+      statementClosingBalance: value.balanceReconciliation.statementClosingBalance,
+      userReportedCurrentBalance: value.balanceReconciliation.userReportedCurrentBalance,
+      difference: value.balanceReconciliation.difference,
+      note: value.balanceReconciliation.note.slice(0, 500),
+    }
+  }
+
   for (const [index, item] of value.movements.entries()) {
     if (!isRecord(item) || typeof item.id !== 'string') {
       throw new Error(`O movimento ${index + 1} não tem um ID válido.`)
@@ -89,13 +129,18 @@ export const prepareFinancialAnalysisProposal = (
     if (proposedIds.has(item.id)) throw new Error(`O ID ${item.id} aparece mais de uma vez no arquivo.`)
     proposedIds.add(item.id)
 
-    if (current) {
-      for (const field of ['sourceId', 'createdAt'] as const) {
-        if (Object.hasOwn(item, field) && item[field] !== current[field]) {
-          throw new Error(`O identificador protegido "${field}" do movimento ${item.id} não pode ser alterado.`)
-        }
-      }
+    if (current && Object.hasOwn(item, 'createdAt') && item.createdAt !== current.createdAt) {
+      throw new Error(`O identificador protegido "createdAt" do movimento ${item.id} não pode ser alterado.`)
     }
+    if (current?.sourceId && Object.hasOwn(item, 'sourceId') && item.sourceId !== current.sourceId) {
+      throw new Error(`O identificador protegido "sourceId" do movimento ${item.id} não pode ser alterado.`)
+    }
+    if (Object.hasOwn(item, 'sourceId') && item.sourceId !== undefined &&
+        (typeof item.sourceId !== 'string' || !/^\d{9,16}$/.test(item.sourceId))) {
+      throw new Error(`O identificador sourceId do movimento ${item.id} é inválido.`)
+    }
+
+    const sourceId = typeof item.sourceId === 'string' ? item.sourceId : current?.sourceId
 
     const name = item.name === undefined ? current?.name ?? '' : typeof item.name === 'string' ? item.name.trim() : ''
     const kind = item.kind === undefined ? current?.kind : item.kind
@@ -115,7 +160,7 @@ export const prepareFinancialAnalysisProposal = (
     }
     if (typeof notes !== 'string' || notes.length > 1000) throw new Error(`A observação do movimento ${item.id} é inválida.`)
     if (walletId !== null && (typeof walletId !== 'string' || !walletId)) throw new Error(`A carteira do movimento ${item.id} é inválida.`)
-    if (walletId && currentWalletIds && !currentWalletIds.includes(walletId)) {
+    if (walletId && currentWallets && !currentWalletById.has(walletId)) {
       throw new Error(`A carteira do movimento ${item.id} não existe nos dados atuais.`)
     }
     if (kind === 'salary' && category !== 'Salário' || kind === 'extra' && category !== 'Renda extra' ||
@@ -131,15 +176,36 @@ export const prepareFinancialAnalysisProposal = (
       date,
       notes,
       walletId,
+      sourceId,
     }
     if (current) updates.set(item.id, fields)
     else {
       additions.push({
         ...fields,
         id: item.id,
-        ...(typeof item.sourceId === 'string' ? { sourceId: item.sourceId } : {}),
         createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
       })
+    }
+  }
+
+  const proposedWalletIds = new Set<string>()
+  if (value.wallets !== undefined && currentWallets) {
+    if (!Array.isArray(value.wallets)) throw new Error('A lista de carteiras da proposta está inválida.')
+    for (const [index, item] of value.wallets.entries()) {
+      if (!isRecord(item) || typeof item.id !== 'string') throw new Error(`A carteira ${index + 1} não tem um ID válido.`)
+      const current = currentWalletById.get(item.id)
+      if (!current) throw new Error(`A carteira ${item.id} não pertence aos dados atuais.`)
+      if (proposedWalletIds.has(item.id)) throw new Error(`A carteira ${item.id} aparece mais de uma vez no arquivo.`)
+      proposedWalletIds.add(item.id)
+      if (Object.hasOwn(item, 'kind') && item.kind !== current.kind) {
+        throw new Error(`O tipo da carteira ${item.id} não pode ser alterado pelo relatório.`)
+      }
+      const name = item.name === undefined ? current.name : typeof item.name === 'string' ? item.name.trim() : ''
+      const openingBalance = item.openingBalance === undefined ? current.openingBalance : item.openingBalance
+      if (!name || name.length > 40 || typeof openingBalance !== 'number' || !Number.isFinite(openingBalance)) {
+        throw new Error(`Nome ou saldo inicial inválido na carteira ${item.id}.`)
+      }
+      walletUpdates.set(item.id, { ...current, name, openingBalance })
     }
   }
 
@@ -155,6 +221,7 @@ export const prepareFinancialAnalysisProposal = (
     date: movement.date,
     notes: movement.notes,
     walletId: movement.walletId ?? null,
+    sourceId: movement.sourceId,
   })
   const updatedMovements = currentMovements
     .filter((movement) => !removedIds.has(movement.id))
@@ -169,28 +236,38 @@ export const prepareFinancialAnalysisProposal = (
     }),
     ...additions.map((movement): FinancialAnalysisChange => ({ id: movement.id, action: 'added', before: null, after: snapshot(movement) })),
   ]
+  const wallets = (currentWallets ?? []).map((current) => ({ ...current, ...walletUpdates.get(current.id) }))
+  const walletChanges = (currentWallets ?? []).flatMap((current): FinancialAnalysisWalletChange[] => {
+    const updated = walletUpdates.get(current.id)
+    if (!updated || (updated.name === current.name && updated.openingBalance === current.openingBalance)) return []
+    return [{ id: current.id, name: updated.name, before: current.openingBalance, after: updated.openingBalance }]
+  })
 
-  return { movements, changes, newExpenseCategories: [...newExpenseCategories] }
+  return { movements, changes, wallets, walletChanges, balanceReconciliation, newExpenseCategories: [...newExpenseCategories] }
 }
 
 const normalizedName = (value: string) =>
   value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+const toCents = (value: number) => Math.round(value * 100)
+const fromCents = (value: number) => value / 100
 
 export const createFinancialAnalysisReport = (input: FinancialAnalysisInput, exportedAt = new Date()) => {
   const incomeMovements = input.movements.filter((movement) => movement.kind !== 'expense')
   const expenseMovements = input.movements.filter((movement) => movement.kind === 'expense')
-  const totalIncome = incomeMovements.reduce((total, movement) => total + movement.amount, 0)
-  const totalExpenses = expenseMovements.reduce((total, movement) => total + movement.amount, 0)
-  const monthlyTotals = new Map<string, { income: number; expenses: number; incomeCount: number; expenseCount: number }>()
+  const totalIncomeCents = incomeMovements.reduce((total, movement) => total + toCents(movement.amount), 0)
+  const totalExpenseCents = expenseMovements.reduce((total, movement) => total + toCents(movement.amount), 0)
+  const totalIncome = fromCents(totalIncomeCents)
+  const totalExpenses = fromCents(totalExpenseCents)
+  const monthlyTotals = new Map<string, { incomeCents: number; expenseCents: number; incomeCount: number; expenseCount: number }>()
 
   for (const movement of input.movements) {
     const month = movement.date.slice(0, 7)
-    const totals = monthlyTotals.get(month) ?? { income: 0, expenses: 0, incomeCount: 0, expenseCount: 0 }
+    const totals = monthlyTotals.get(month) ?? { incomeCents: 0, expenseCents: 0, incomeCount: 0, expenseCount: 0 }
     if (movement.kind === 'expense') {
-      totals.expenses += movement.amount
+      totals.expenseCents += toCents(movement.amount)
       totals.expenseCount += 1
     } else {
-      totals.income += movement.amount
+      totals.incomeCents += toCents(movement.amount)
       totals.incomeCount += 1
     }
     monthlyTotals.set(month, totals)
@@ -205,13 +282,17 @@ export const createFinancialAnalysisReport = (input: FinancialAnalysisInput, exp
   }
 
   const firstWalletId = input.wallets[0]?.id
-  const walletBalances = input.wallets.map((wallet) => ({
-    ...wallet,
-    balance: wallet.openingBalance + input.movements
+  const walletBalances = input.wallets.map((wallet) => {
+    const balanceCents = toCents(wallet.openingBalance) + input.movements
       .filter((movement) => movement.walletId === wallet.id || (!movement.walletId && wallet.id === firstWalletId))
-      .reduce((balance, movement) => balance + (movement.kind === 'expense' ? -movement.amount : movement.amount), 0),
-  }))
+      .reduce((balance, movement) => balance + (movement.kind === 'expense' ? -toCents(movement.amount) : toCents(movement.amount)), 0)
+    return { ...wallet, balance: fromCents(balanceCents) }
+  })
   const openDebts = input.debts.filter((debt) => !debt.isPaid)
+  const openDebtBalance = fromCents(openDebts.reduce((total, debt) => total + toCents(debt.remainingBalance ?? debt.amount), 0))
+  const paidDebtOriginalAmount = fromCents(input.debts
+    .filter((debt) => debt.isPaid)
+    .reduce((total, debt) => total + toCents(debt.amount), 0))
 
   return {
     app: 'GranaZen',
@@ -238,19 +319,26 @@ export const createFinancialAnalysisReport = (input: FinancialAnalysisInput, exp
       expenseCount: expenseMovements.length,
       totalIncome,
       totalExpenses,
-      netFromMovements: totalIncome - totalExpenses,
+      netFromMovements: fromCents(totalIncomeCents - totalExpenseCents),
       debtCount: input.debts.length,
       openDebtCount: openDebts.length,
-      openDebtBalance: openDebts.reduce((total, debt) => total + (debt.remainingBalance ?? debt.amount), 0),
-      paidDebtOriginalAmount: input.debts.filter((debt) => debt.isPaid).reduce((total, debt) => total + debt.amount, 0),
+      openDebtBalance,
+      paidDebtOriginalAmount,
       importedMovementCount: input.movements.filter((movement) => movement.notes.startsWith('Importado de extrato')).length,
       importedPdfMovementCount: input.movements.filter((movement) => movement.notes === 'Importado de extrato PDF').length,
     },
-    monthlySummary: [...monthlyTotals.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([month, totals]) => ({
-      month,
-      ...totals,
-      net: totals.income - totals.expenses,
-    })),
+    monthlySummary: [...monthlyTotals.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([month, totals]) => {
+      const income = fromCents(totals.incomeCents)
+      const expenses = fromCents(totals.expenseCents)
+      return {
+        month,
+        income,
+        expenses,
+        incomeCount: totals.incomeCount,
+        expenseCount: totals.expenseCount,
+        net: fromCents(totals.incomeCents - totals.expenseCents),
+      }
+    }),
     qualityChecks: {
       movementsWithoutWalletId: input.movements.filter((movement) => !movement.walletId).length,
       possibleDuplicateGroups: [...duplicateCandidates.values()]

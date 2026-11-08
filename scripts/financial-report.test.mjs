@@ -53,6 +53,28 @@ test('builds a complete finance report with monthly and wallet summaries', () =>
   assert.equal(JSON.stringify(report).includes('profile-photo'), false)
 })
 
+test('sums currency using whole cents without floating point residue', () => {
+  const report = createFinancialAnalysisReport({
+    movements: [
+      movement({ id: 'ten-cents', amount: 0.1 }),
+      movement({ id: 'twenty-cents', amount: 0.2 }),
+      movement({ id: 'income-ten-cents', kind: 'extra', category: 'Renda extra', amount: 0.1 }),
+    ],
+    debts: [],
+    wallets: [{ id: 'wallet-1', name: 'Carteira', kind: 'checking', openingBalance: 0.1 }],
+    budgets: [],
+    goals: [],
+    customExpenseCategories: [],
+  })
+
+  assert.equal(report.summary.totalExpenses, 0.3)
+  assert.equal(report.summary.totalIncome, 0.1)
+  assert.equal(report.summary.netFromMovements, -0.2)
+  assert.equal(report.monthlySummary[0].expenses, 0.3)
+  assert.equal(report.monthlySummary[0].net, -0.2)
+  assert.equal(report.wallets[0].balance, -0.1)
+})
+
 test('prepares reviewed corrections to amount, date, wallet, and descriptions', () => {
   const movement = {
     id: 'stable-id', kind: 'expense', category: 'Outros', name: 'Compra 123456789012', amount: 25,
@@ -88,7 +110,7 @@ test('prepares reviewed corrections to amount, date, wallet, and descriptions', 
 test('accepts explicit additions and removals and rejects protected identifier changes', () => {
   const movement = {
     id: 'stable-id', kind: 'expense', category: 'Outros', name: 'Compra', amount: 25,
-    date: '2026-03-04', notes: 'Importado de extrato PDF', createdAt: '2026-03-04T10:00:00.000Z',
+    date: '2026-03-04', notes: 'Importado de extrato PDF', sourceId: '123456789', createdAt: '2026-03-04T10:00:00.000Z',
   }
   const report = JSON.parse(JSON.stringify(createFinancialAnalysisReport({ movements: [movement], debts: [], wallets: [], budgets: [], goals: [], customExpenseCategories: [] })))
   report.movements = [{
@@ -102,6 +124,34 @@ test('accepts explicit additions and removals and rejects protected identifier c
   assert.deepEqual(proposal.changes.map(({ action }) => action), ['removed', 'added'])
 
   const protectedReport = JSON.parse(JSON.stringify(createFinancialAnalysisReport({ movements: [movement], debts: [], wallets: [], budgets: [], goals: [], customExpenseCategories: [] })))
-  protectedReport.movements[0].sourceId = 'altered-source-id'
+  protectedReport.movements[0].sourceId = '987654321'
   assert.throws(() => prepareFinancialAnalysisProposal(protectedReport, [movement], ['Mercado'], []), /identificador protegido "sourceId"/)
+})
+
+test('fills a missing bank operation ID and proposes a wallet opening-balance correction', () => {
+  const movement = {
+    id: 'legacy-id', kind: 'expense', category: 'Outros', name: 'Compra 123456789', amount: 25,
+    date: '2026-03-04', notes: 'Importado de extrato PDF', walletId: 'wallet-1',
+    createdAt: '2026-03-04T10:00:00.000Z',
+  }
+  const wallet = { id: 'wallet-1', name: 'Mercado Pago', kind: 'checking', openingBalance: 0 }
+  const report = JSON.parse(JSON.stringify(createFinancialAnalysisReport({
+    movements: [movement], debts: [], wallets: [wallet], budgets: [], goals: [], customExpenseCategories: [],
+  })))
+  report.movements[0].sourceId = '123456789'
+  report.wallets[0].openingBalance = 10.25
+  report.balanceReconciliation = {
+    asOf: '2026-03-04',
+    statementClosingBalance: 10.25,
+    userReportedCurrentBalance: 10,
+    difference: -0.25,
+    note: 'Há movimento posterior para conferir.',
+  }
+
+  const proposal = prepareFinancialAnalysisProposal(report, [movement], ['Outros'], [], [wallet])
+  assert.equal(proposal.movements[0].sourceId, '123456789')
+  assert.equal(proposal.wallets[0].openingBalance, 10.25)
+  assert.deepEqual(proposal.walletChanges, [{ id: 'wallet-1', name: 'Mercado Pago', before: 0, after: 10.25 }])
+  assert.deepEqual(proposal.balanceReconciliation, report.balanceReconciliation)
+  assert.equal(proposal.changes.length, 1)
 })

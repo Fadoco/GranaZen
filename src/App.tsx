@@ -1039,9 +1039,9 @@ function App() {
         movements,
         allExpenseCategories,
         extras.customExpenseCategories,
-        extras.wallets.map((wallet) => wallet.id),
+        extras.wallets,
       )
-      if (!proposal.changes.length) {
+      if (!proposal.changes.length && !proposal.walletChanges.length) {
         setAnalysisStatus('A IA não propôs alterações organizacionais para os movimentos enviados.')
         return
       }
@@ -1061,13 +1061,13 @@ function App() {
       return
     }
     setMovements(analysisProposal.movements)
-    if (analysisProposal.newExpenseCategories.length) {
-      setExtras((current) => ({
-        ...current,
-        customExpenseCategories: [...current.customExpenseCategories, ...analysisProposal.newExpenseCategories],
-      }))
-    }
-    setAnalysisStatus(`${analysisProposal.changes.length} alteração${analysisProposal.changes.length === 1 ? '' : 'ões'} aplicada${analysisProposal.changes.length === 1 ? '' : 's'} aos movimentos.`)
+    setExtras((current) => ({
+      ...current,
+      wallets: analysisProposal.wallets,
+      customExpenseCategories: [...current.customExpenseCategories, ...analysisProposal.newExpenseCategories],
+    }))
+    const appliedCount = analysisProposal.changes.length + analysisProposal.walletChanges.length
+    setAnalysisStatus(`${appliedCount} correção${appliedCount === 1 ? '' : 'ões'} aplicada${appliedCount === 1 ? '' : 's'} aos dados financeiros.`)
     setAnalysisError('')
     setAnalysisProposal(null)
     setAnalysisBackupConfirmed(false)
@@ -2138,15 +2138,26 @@ function App() {
         <section className="panel preferences-card analysis-review" aria-labelledby="analysis-review-title">
           <div className="preferences-card-heading">
             <span className="eyebrow">REVISÃO NECESSÁRIA</span>
-            <h2 id="analysis-review-title">{analysisProposal.changes.length} alteração{analysisProposal.changes.length === 1 ? '' : 'ões'} proposta{analysisProposal.changes.length === 1 ? '' : 's'}</h2>
-            <p>Confira os dados antes e depois. Nenhuma mudança foi salva ainda; inclusões e exclusões também serão aplicadas.</p>
+            <h2 id="analysis-review-title">{analysisProposal.changes.length + analysisProposal.walletChanges.length} correção{analysisProposal.changes.length + analysisProposal.walletChanges.length === 1 ? '' : 'ões'} proposta{analysisProposal.changes.length + analysisProposal.walletChanges.length === 1 ? '' : 's'}</h2>
+            <p>Confira os dados antes e depois. Nenhuma mudança foi salva ainda; valores, IDs ausentes, saldo inicial, inclusões e exclusões aparecem nesta revisão.</p>
           </div>
+          {analysisProposal.balanceReconciliation && (
+            <p className="backup-warning" role="note">
+              Conferência até {analysisProposal.balanceReconciliation.asOf}: extrato {currency(analysisProposal.balanceReconciliation.statementClosingBalance)}, saldo informado {currency(analysisProposal.balanceReconciliation.userReportedCurrentBalance)}, diferença {currency(analysisProposal.balanceReconciliation.difference)}. {analysisProposal.balanceReconciliation.note}
+            </p>
+          )}
           <div className="analysis-change-list">
             {analysisProposal.changes.map((change) => (
               <article className="analysis-change-row" key={change.id}>
                 <strong>{change.action === 'added' ? 'Novo movimento' : change.action === 'removed' ? 'Remover movimento' : 'Corrigir movimento'}: {change.after?.name ?? change.before?.name ?? change.id}</strong>
                 {change.before && <small>Antes: {currency(change.before.amount)} · {change.before.date} · {change.before.kind} · {change.before.category} · carteira {change.before.walletId ?? 'não definida'} · {change.before.notes || 'sem observação'}</small>}
                 {change.after && <small>Depois: {currency(change.after.amount)} · {change.after.date} · {change.after.kind} · {change.after.category} · carteira {change.after.walletId ?? 'não definida'} · {change.after.notes || 'sem observação'}</small>}
+              </article>
+            ))}
+            {analysisProposal.walletChanges.map((change) => (
+              <article className="analysis-change-row" key={`wallet-${change.id}`}>
+                <strong>Corrigir saldo inicial: {change.name}</strong>
+                <small>Antes: {currency(change.before)} · Depois: {currency(change.after)}</small>
               </article>
             ))}
           </div>
