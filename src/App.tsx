@@ -56,7 +56,7 @@ import {
 } from './androidUpdate'
 import { pickBackupFile, saveBackupFile, saveFinancialReportFile } from './backupFiles'
 import { isValidDateValue, matchesSearch, nextRecurringDueDate } from './financeUtils'
-import { createFinancialAnalysisReport } from './financialReport'
+import { createFinancialAnalysisReport, prepareFinancialAnalysisProposal, type FinancialAnalysisProposal } from './financialReport'
 import { parseStatementFile, selectNonDuplicateStatementEntries, type StatementEntry } from './statementImport'
 import type { Debt } from './financeTypes'
 import {
@@ -66,7 +66,7 @@ import {
   supportsNativeReminders,
 } from './localReminders'
 
-type Section = 'inicio' | 'movimentos' | 'contas' | 'dividas' | 'calendario' | 'historico' | 'mais'
+type Section = 'inicio' | 'movimentos' | 'contas' | 'dividas' | 'calendario' | 'historico' | 'analise' | 'mais'
 type Theme = 'system' | 'light' | 'dark'
 type Accent = 'forest' | 'ocean' | 'plum'
 type Preferences = { theme: Theme; textSize: 'normal' | 'large'; hideAmounts: boolean; accent: Accent }
@@ -83,6 +83,7 @@ type Movement = {
   amount: number
   date: string
   notes: string
+  sourceId?: string
   walletId?: string | null
   createdAt: string
 }
@@ -157,6 +158,7 @@ const navigation: { id: Section; label: string; icon: typeof House }[] = [
   { id: 'dividas', label: 'Dívidas', icon: ArrowLeftRight },
   { id: 'calendario', label: 'Calendário', icon: CalendarRange },
   { id: 'historico', label: 'Histórico', icon: History },
+  { id: 'analise', label: 'Análise', icon: ChartNoAxesColumnIncreasing },
   { id: 'mais', label: 'Mais', icon: Settings },
 ]
 
@@ -167,6 +169,7 @@ const sectionTitles: Record<Section, string> = {
   dividas: 'Dívidas e empréstimos',
   calendario: 'Calendário financeiro',
   historico: 'Histórico financeiro',
+  analise: 'Análise financeira',
   mais: 'Personalização',
 }
 
@@ -421,6 +424,7 @@ const parseMovements = (value: unknown): Movement[] => {
         typeof movement.amount !== 'number' || !Number.isFinite(movement.amount) || movement.amount <= 0 ||
         !isValidDateValue(movement.date) ||
         typeof movement.notes !== 'string' ||
+        (movement.sourceId !== undefined && typeof movement.sourceId !== 'string') ||
         (movement.walletId !== undefined && movement.walletId !== null && typeof movement.walletId !== 'string') ||
         typeof movement.createdAt !== 'string') {
       throw new Error('Há um lançamento salvo com dados inválidos.')
@@ -433,6 +437,7 @@ const parseMovements = (value: unknown): Movement[] => {
       amount: movement.amount,
       date: movement.date,
       notes: movement.notes,
+      ...(typeof movement.sourceId === 'string' ? { sourceId: movement.sourceId } : {}),
       walletId: typeof movement.walletId === 'string' ? movement.walletId : null,
       createdAt: movement.createdAt,
     }
@@ -463,6 +468,9 @@ function App() {
   const [backupStatus, setBackupStatus] = useState('')
   const [analysisError, setAnalysisError] = useState('')
   const [analysisStatus, setAnalysisStatus] = useState('')
+  const [isReadingAnalysisProposal, setIsReadingAnalysisProposal] = useState(false)
+  const [analysisProposal, setAnalysisProposal] = useState<FinancialAnalysisProposal | null>(null)
+  const analysisInputRef = useRef<HTMLInputElement>(null)
   const [isProcessingBackup, setIsProcessingBackup] = useState(false)
   const backupInputRef = useRef<HTMLInputElement>(null)
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -1012,6 +1020,46 @@ function App() {
     } finally {
       setIsProcessingBackup(false)
     }
+  }
+
+  const handleFinancialAnalysisFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    setIsReadingAnalysisProposal(true)
+    setAnalysisError('')
+    setAnalysisStatus('')
+    setAnalysisProposal(null)
+    try {
+      if (file.size > 20 * 1024 * 1024) throw new Error('O arquivo excede o limite de 20 MB.')
+      const content: unknown = JSON.parse(await file.text())
+      const proposal = prepareFinancialAnalysisProposal(content, movements, allExpenseCategories, extras.customExpenseCategories)
+      if (!proposal.changes.length) {
+        setAnalysisStatus('A IA não propôs alterações organizacionais para os movimentos enviados.')
+        return
+      }
+      setAnalysisProposal(proposal)
+    } catch (error) {
+      console.error('Não foi possível validar a proposta de análise financeira.', error)
+      setAnalysisError(error instanceof Error ? error.message : 'Não foi possível ler a proposta da IA.')
+    } finally {
+      setIsReadingAnalysisProposal(false)
+    }
+  }
+
+  const applyFinancialAnalysisProposal = () => {
+    if (!analysisProposal) return
+    setMovements(analysisProposal.movements)
+    if (analysisProposal.newExpenseCategories.length) {
+      setExtras((current) => ({
+        ...current,
+        customExpenseCategories: [...current.customExpenseCategories, ...analysisProposal.newExpenseCategories],
+      }))
+    }
+    setAnalysisStatus(`${analysisProposal.changes.length} lançamento${analysisProposal.changes.length === 1 ? '' : 's'} reorganizado${analysisProposal.changes.length === 1 ? '' : 's'}. Valores, datas, carteiras e IDs foram preservados.`)
+    setAnalysisError('')
+    setAnalysisProposal(null)
   }
 
   const importBackupContent = async (content: string) => {
@@ -2031,22 +2079,64 @@ function App() {
           <button className="secondary-button" type="button" onClick={() => void selectBackupFile()} disabled={isProcessingBackup}>
             <Upload size={16} /> Importar backup
           </button>
-          <button className="secondary-button analysis-report-button" type="button" onClick={() => void exportFinancialAnalysis()} disabled={isProcessingBackup}>
-            <FileText size={16} /> {isProcessingBackup ? 'Aguarde…' : 'Exportar relatório para análise'}
-          </button>
           <input ref={backupInputRef} className="backup-file-input" type="file" accept=".json,application/json" onChange={(event) => void handleBackupFileChange(event)} />
         </div>
         <p className="backup-warning">A importação substitui os dados que estão neste aparelho. O arquivo não tem senha: guarde-o em um local privado.</p>
         {backupError && <p className="preferences-error" role="alert">{backupError}</p>}
         {backupStatus && <p className="backup-status" role="status">{backupStatus}</p>}
-        <p className="backup-warning">O relatório inclui transações, descrições, observações e nomes de carteiras, mas não inclui foto nem dados de contato do perfil. Revise-o antes de compartilhar.</p>
-        {analysisError && <p className="preferences-error" role="alert">{analysisError}</p>}
-        {analysisStatus && <p className="backup-status" role="status">{analysisStatus}</p>}
       </section>
         </div>
       </details>
       {preferencesError && <p className="preferences-error" role="alert">{preferencesError}</p>}
       {extrasError && <p className="preferences-error" role="alert">{extrasError}</p>}
+    </div>
+  )
+
+  const renderFinancialAnalysis = () => (
+    <div className="analysis-layout">
+      <section className="panel preferences-card">
+        <div className="preferences-card-heading">
+          <span className="eyebrow">FLUXO COM IA</span>
+          <h2>Exportar, revisar e organizar</h2>
+          <p>Exporte os dados, peça à IA para sugerir categorias e descrições mais claras e importe o JSON revisado para conferir as mudanças antes de aplicar.</p>
+        </div>
+        <div className="backup-actions analysis-actions">
+          <button className="primary-button" type="button" onClick={() => void exportFinancialAnalysis()} disabled={isProcessingBackup}>
+            <Download size={16} /> {isProcessingBackup ? 'Aguarde…' : 'Exportar relatório para IA'}
+          </button>
+          <button className="secondary-button" type="button" onClick={() => analysisInputRef.current?.click()} disabled={isReadingAnalysisProposal}>
+            <Upload size={16} /> {isReadingAnalysisProposal ? 'Lendo proposta…' : 'Importar relatório revisado'}
+          </button>
+          <input ref={analysisInputRef} className="backup-file-input" type="file" accept=".json,application/json" onChange={(event) => void handleFinancialAnalysisFile(event)} />
+        </div>
+        <p className="backup-warning">A IA pode alterar nome, tipo, categoria e observação. O app rejeita alterações de valor, data, carteira, IDs e novas transações. As mudanças só são salvas após sua confirmação.</p>
+        <p className="backup-warning">O arquivo contém descrições e observações financeiras. Revise dados pessoais antes de enviá-lo a qualquer serviço de IA.</p>
+        {analysisError && <p className="preferences-error" role="alert">{analysisError}</p>}
+        {analysisStatus && <p className="backup-status" role="status">{analysisStatus}</p>}
+      </section>
+      {analysisProposal && (
+        <section className="panel preferences-card analysis-review" aria-labelledby="analysis-review-title">
+          <div className="preferences-card-heading">
+            <span className="eyebrow">REVISÃO NECESSÁRIA</span>
+            <h2 id="analysis-review-title">{analysisProposal.changes.length} alteração{analysisProposal.changes.length === 1 ? '' : 'ões'} proposta{analysisProposal.changes.length === 1 ? '' : 's'}</h2>
+            <p>Confira cada sugestão. Nenhuma mudança foi salva ainda. Valores, datas, carteiras e IDs permanecem iguais.</p>
+          </div>
+          <div className="analysis-change-list">
+            {analysisProposal.changes.map((change) => (
+              <article className="analysis-change-row" key={change.id}>
+                <strong>{change.after.name}</strong>
+                <small>{change.before.kind} · {change.before.category} → {change.after.kind} · {change.after.category}</small>
+                {change.before.name !== change.after.name && <small>Antes: {change.before.name}</small>}
+              </article>
+            ))}
+          </div>
+          <p className="backup-warning">Novas categorias de gasto a adicionar: {analysisProposal.newExpenseCategories.length ? analysisProposal.newExpenseCategories.join(', ') : 'nenhuma'}.</p>
+          <div className="analysis-review-actions">
+            <button className="secondary-button" type="button" onClick={() => setAnalysisProposal(null)}>Cancelar</button>
+            <button className="primary-button" type="button" onClick={applyFinancialAnalysisProposal}><Check size={16} /> Aplicar alterações</button>
+          </div>
+        </section>
+      )}
     </div>
   )
 
@@ -2129,10 +2219,12 @@ function App() {
 
         <div className="page-content">
           <div className="page-heading">
-            <div><span className="eyebrow">{activeSection === 'mais' ? 'DEIXE DO SEU JEITO' : activeSection === 'movimentos' ? 'CONTROLE DO DIA A DIA' : activeSection === 'historico' ? 'VISÃO AO LONGO DO TEMPO' : activeSection === 'dividas' ? 'CONTAS E COMPROMISSOS' : activeSection === 'contas' ? 'ORGANIZAÇÃO FINANCEIRA' : activeSection === 'calendario' ? 'AGENDA FINANCEIRA' : todayLabel}</span><h1>{sectionTitles[activeSection]}</h1><p>{activeSection === 'mais' ? 'Ajuste o visual e a leitura do seu aplicativo.' : activeSection === 'movimentos' ? 'Anote gastos rápidos e todo dinheiro que entrar.' : activeSection === 'historico' ? 'Acompanhe tudo que aconteceu com seu dinheiro ao longo do tempo.' : activeSection === 'dividas' ? 'Acompanhe vencimentos, pagamentos e contas recorrentes.' : activeSection === 'contas' ? 'Veja seus compromissos financeiros em um só lugar.' : activeSection === 'calendario' ? 'Consulte contas, gastos e recebimentos por data.' : 'Um resumo claro para você cuidar bem do seu dinheiro.'}</p></div>
-            {activeSection !== 'mais' && activeSection !== 'contas' && activeSection !== 'historico' && activeSection !== 'calendario' && <button className="primary-button" onClick={() => activeSection === 'dividas' ? openNewDebtForm() : openNewMovementForm('expense')}><Plus size={18} /> {activeSection === 'dividas' ? 'Nova dívida' : activeSection === 'movimentos' ? 'Novo gasto' : 'Novo lançamento'}</button>}
+            <div><span className="eyebrow">{activeSection === 'mais' ? 'DEIXE DO SEU JEITO' : activeSection === 'analise' ? 'ORGANIZAÇÃO ASSISTIDA' : activeSection === 'movimentos' ? 'CONTROLE DO DIA A DIA' : activeSection === 'historico' ? 'VISÃO AO LONGO DO TEMPO' : activeSection === 'dividas' ? 'CONTAS E COMPROMISSOS' : activeSection === 'contas' ? 'ORGANIZAÇÃO FINANCEIRA' : activeSection === 'calendario' ? 'AGENDA FINANCEIRA' : todayLabel}</span><h1>{sectionTitles[activeSection]}</h1><p>{activeSection === 'mais' ? 'Ajuste o visual e a leitura do seu aplicativo.' : activeSection === 'analise' ? 'Exporte os dados, revise sugestões de IA e aplique apenas o que você aprovar.' : activeSection === 'movimentos' ? 'Anote gastos rápidos e todo dinheiro que entrar.' : activeSection === 'historico' ? 'Acompanhe tudo que aconteceu com seu dinheiro ao longo do tempo.' : activeSection === 'dividas' ? 'Acompanhe vencimentos, pagamentos e contas recorrentes.' : activeSection === 'contas' ? 'Veja seus compromissos financeiros em um só lugar.' : activeSection === 'calendario' ? 'Consulte contas, gastos e recebimentos por data.' : 'Um resumo claro para você cuidar bem do seu dinheiro.'}</p></div>
+            {activeSection !== 'mais' && activeSection !== 'analise' && activeSection !== 'contas' && activeSection !== 'historico' && activeSection !== 'calendario' && <button className="primary-button" onClick={() => activeSection === 'dividas' ? openNewDebtForm() : openNewMovementForm('expense')}><Plus size={18} /> {activeSection === 'dividas' ? 'Nova dívida' : activeSection === 'movimentos' ? 'Novo gasto' : 'Novo lançamento'}</button>}
           </div>
-          {activeSection === 'mais' ? (
+          {activeSection === 'analise' ? (
+            renderFinancialAnalysis()
+          ) : activeSection === 'mais' ? (
             renderPreferences()
           ) : activeSection === 'calendario' ? (
             renderCalendar()

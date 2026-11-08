@@ -15,7 +15,7 @@ export const parsePdfStatementFile = async (content: ArrayBuffer) => {
   }
 
   try {
-    const lines: { y: number; parts: { x: number; text: string }[] }[] = []
+    const pages: string[] = []
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
       const page = await document.getPage(pageNumber)
       const textContent = await page.getTextContent()
@@ -34,14 +34,13 @@ export const parsePdfStatementFile = async (content: ArrayBuffer) => {
         }
         line.parts.push({ x: item.x, text: item.text })
       }
-      lines.push(...pageLines)
+      pages.push(pageLines
+        .sort((first, second) => second.y - first.y)
+        .map((line) => line.parts.sort((first, second) => first.x - second.x).map((part) => part.text).join(' '))
+        .join('\n'))
       page.cleanup()
     }
-    const text = lines
-      .sort((first, second) => second.y - first.y)
-      .map((line) => line.parts.sort((first, second) => first.x - second.x).map((part) => part.text).join(' '))
-      .join('\n')
-    return parsePdfStatementText(text)
+    return parsePdfStatementText(pages.join('\n\n'))
   } finally {
     await loadingTask.destroy()
   }

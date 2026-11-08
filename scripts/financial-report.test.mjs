@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createFinancialAnalysisReport } from '../src/financialReport.ts'
+import { createFinancialAnalysisReport, prepareFinancialAnalysisProposal } from '../src/financialReport.ts'
 
 const movement = (changes) => ({
   id: 'movement-1',
@@ -51,4 +51,43 @@ test('builds a complete finance report with monthly and wallet summaries', () =>
   assert.equal('profile' in report, false)
   assert.equal('preferences' in report, false)
   assert.equal(JSON.stringify(report).includes('profile-photo'), false)
+})
+
+test('prepares AI organization changes without changing financial amounts or dates', () => {
+  const movement = {
+    id: 'stable-id', kind: 'expense', category: 'Outros', name: 'Compra 123456789012', amount: 25,
+    date: '2026-03-04', notes: 'Importado de extrato PDF', sourceId: '123456789012', walletId: 'wallet-1',
+    createdAt: '2026-03-04T10:00:00.000Z',
+  }
+  const report = JSON.parse(JSON.stringify(createFinancialAnalysisReport({
+    movements: [movement],
+    debts: [],
+    wallets: [{ id: 'wallet-1', name: 'Conta', kind: 'checking', openingBalance: 0 }],
+    budgets: [],
+    goals: [],
+    customExpenseCategories: [],
+  })))
+  report.movements[0].name = 'Transporte por aplicativo'
+  report.movements[0].category = 'Transporte'
+
+  const proposal = prepareFinancialAnalysisProposal(report, [movement], ['Mercado', 'Transporte'], [])
+  assert.equal(proposal.changes.length, 1)
+  assert.equal(proposal.movements[0].name, 'Transporte por aplicativo')
+  assert.equal(proposal.movements[0].category, 'Transporte')
+  assert.equal(proposal.movements[0].amount, 25)
+  assert.equal(proposal.movements[0].date, '2026-03-04')
+  assert.deepEqual(proposal.newExpenseCategories, [])
+})
+
+test('rejects AI proposals that change protected amounts or invent transaction IDs', () => {
+  const movement = {
+    id: 'stable-id', kind: 'expense', category: 'Outros', name: 'Compra', amount: 25,
+    date: '2026-03-04', notes: 'Importado de extrato PDF', createdAt: '2026-03-04T10:00:00.000Z',
+  }
+  const report = JSON.parse(JSON.stringify(createFinancialAnalysisReport({ movements: [movement], debts: [], wallets: [], budgets: [], goals: [], customExpenseCategories: [] })))
+  report.movements[0].amount = 250
+  assert.throws(() => prepareFinancialAnalysisProposal(report, [movement], ['Mercado'], []), /campo protegido "amount"/)
+
+  report.movements[0] = { ...report.movements[0], id: 'unknown-id', amount: 25 }
+  assert.throws(() => prepareFinancialAnalysisProposal(report, [movement], ['Mercado'], []), /não pode adicionar nem substituir transações/)
 })

@@ -7,23 +7,58 @@ export type StatementEntry = {
   kind: 'expense' | 'extra'
   category: 'Outros' | 'Renda extra'
   notes: string
+  sourceId?: string
 }
 
 const normalizeHeader = (value: string) =>
   value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR')
 
-const statementEntryKey = (entry: Pick<StatementEntry, 'date' | 'name' | 'amount'>) =>
-  `${entry.date}|${entry.amount.toFixed(2)}|${normalizeHeader(entry.name).replace(/[^\p{L}\p{N}]+/gu, ' ').trim()}`
+type StatementIdentity = Pick<StatementEntry, 'date' | 'name' | 'amount'> &
+  Partial<Pick<StatementEntry, 'kind' | 'notes' | 'sourceId'>>
+
+const normalizedTransactionName = (name: string) =>
+  normalizeHeader(name.replace(/\b\d{9,16}\b/g, ' ')).replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+
+const legacySourceId = (entry: StatementIdentity) =>
+  entry.sourceId ?? (entry.notes?.startsWith('Importado de extrato PDF') ? entry.name.match(/\b\d{9,16}\b/)?.[0] : undefined)
+
+const statementNameKey = (entry: StatementIdentity) =>
+  `${entry.date}|${entry.amount.toFixed(2)}|${normalizedTransactionName(entry.name)}`
+
+const statementSourceKey = (entry: StatementIdentity, sourceId: string, includeFlow: boolean) =>
+  `${entry.date}|${sourceId}|${entry.amount.toFixed(2)}${includeFlow && entry.kind ? `|${entry.kind === 'expense' ? 'expense' : 'income'}` : ''}`
 
 export const selectNonDuplicateStatementEntries = (
-  entries: Pick<StatementEntry, 'date' | 'name' | 'amount'>[],
-  existingEntries: Pick<StatementEntry, 'date' | 'name' | 'amount'>[],
+  entries: StatementIdentity[],
+  existingEntries: StatementIdentity[],
 ) => {
-  const knownEntries = new Set(existingEntries.map(statementEntryKey))
+  const knownSourceEntries = new Set<string>()
+  const knownLegacySourceEntries = new Set<string>()
+  const knownLegacyNames = new Set<string>()
+  const knownNames = new Set<string>()
+  const addKnownEntry = (entry: StatementIdentity) => {
+    knownNames.add(statementNameKey(entry))
+    if (entry.sourceId) knownSourceEntries.add(statementSourceKey(entry, entry.sourceId, true))
+    else {
+      const sourceId = legacySourceId(entry)
+      if (sourceId) knownLegacySourceEntries.add(statementSourceKey(entry, sourceId, false))
+      else knownLegacyNames.add(statementNameKey(entry))
+    }
+  }
+  existingEntries.forEach(addKnownEntry)
+
   return entries.map((entry) => {
-    const key = statementEntryKey(entry)
-    if (knownEntries.has(key)) return false
-    knownEntries.add(key)
+    const nameKey = statementNameKey(entry)
+    const sourceId = entry.sourceId
+    const sourceKey = sourceId ? statementSourceKey(entry, sourceId, true) : ''
+    const legacySourceKey = sourceId ? statementSourceKey(entry, sourceId, false) : ''
+    const isDuplicate = sourceId
+      ? knownSourceEntries.has(sourceKey) || knownLegacySourceEntries.has(legacySourceKey) || knownLegacyNames.has(nameKey)
+      : knownNames.has(nameKey)
+    if (isDuplicate) return false
+    knownNames.add(nameKey)
+    if (sourceId) knownSourceEntries.add(sourceKey)
+    else knownLegacyNames.add(nameKey)
     return true
   })
 }
@@ -166,13 +201,36 @@ const parsePdfAmount = (value: string) => {
 export const parsePdfStatementText = (content: string): StatementEntry[] => {
   const datePattern = /(?<!\d)(\d{4}-\d{2}-\d{2}|\d{2}[./-]\d{2}[./-]\d{4})(?!\d)/
   const amountPattern = /(?:R\$\s*)?[-−]?\s*(?:\(\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2}|\.\d{2})\s*\)?/g
-  const incomePattern = /\b(credito|credit|recebid[oa]|recebimento|deposito|rendimento|estorno|entrada|cashback)\b/i
   const entries: StatementEntry[] = []
+  let activeEntry: StatementEntry | undefined
 
   for (const line of content.split(/\r?\n/)) {
+    const trimmedLine = line.trim()
+    if (!trimmedLine) {
+      activeEntry = undefined
+      continue
+    }
+
+    const normalizedLine = normalizeHeader(trimmedLine)
+    if (/^(data|extrato de conta|detalhe dos movimentos|saldo inicial|saldo final|entradas|saidas|data de geracao|mercado pago instituicao|voce tem alguma duvida|www\.)\b/.test(normalizedLine) || /^\d+\s*\/\s*\d+$/.test(trimmedLine)) {
+      activeEntry = undefined
+      continue
+    }
+
     const dateMatch = datePattern.exec(line)
-    datePattern.lastIndex = 0
-    if (!dateMatch) continue
+    if (!dateMatch) {
+      if (activeEntry) {
+        const continuation = trimmedLine
+          .replace(amountPattern, ' ')
+          .replace(/\b\d{9,16}\b/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+        if (continuation) activeEntry.name = `${activeEntry.name} ${continuation}`.slice(0, 100)
+      }
+      continue
+    }
+
+    activeEntry = undefined
     const date = parsePdfDate(dateMatch[1])
     if (!isValidDateValue(date)) continue
 
@@ -181,27 +239,28 @@ export const parsePdfStatementText = (content: string): StatementEntry[] => {
       .filter((amount): amount is { value: number; text: string } => amount.value !== null && amount.value !== 0)
     if (!amounts.length) continue
 
-    const normalizedLine = normalizeHeader(line)
-    const selected = /\bsaldo\b/i.test(normalizedLine) && amounts.length > 1
-      ? amounts[amounts.length - 2]
-      : amounts.find((amount) => /[-−(]/.test(amount.text)) ?? amounts[0]
+    const selected = amounts[0]
+    const withoutAmounts = line.replace(dateMatch[0], ' ').replace(amountPattern, ' ')
+    const sourceId = withoutAmounts.match(/\b\d{9,16}\b/)?.[0]
     const description = line
       .replace(dateMatch[0], ' ')
-      .replace(selected.text, ' ')
       .replace(amountPattern, ' ')
+      .replace(/\b\d{9,16}\b/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
     if (!description || /^(data|historico|descri[cç][aã]o|lan[cç]amento)$/i.test(description)) continue
 
-    const isIncome = selected.value > 0 && (/[+]/.test(selected.text) || incomePattern.test(normalizedLine))
-    entries.push({
+    const entry: StatementEntry = {
       date,
       name: description.slice(0, 100),
       amount: Math.abs(selected.value),
-      kind: isIncome ? 'extra' : 'expense',
-      category: isIncome ? 'Renda extra' : 'Outros',
+      kind: selected.value > 0 ? 'extra' : 'expense',
+      category: selected.value > 0 ? 'Renda extra' : 'Outros',
       notes: 'Importado de extrato PDF',
-    })
+      ...(sourceId ? { sourceId } : {}),
+    }
+    entries.push(entry)
+    activeEntry = entry
   }
 
   if (!entries.length) {

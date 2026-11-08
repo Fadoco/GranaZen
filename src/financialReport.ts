@@ -8,6 +8,7 @@ export type FinancialReportMovement = {
   amount: number
   date: string
   notes: string
+  sourceId?: string
   walletId?: string | null
   createdAt: string
 }
@@ -29,6 +30,85 @@ export type FinancialAnalysisInput = {
   budgets: FinancialReportBudget[]
   goals: FinancialReportGoal[]
   customExpenseCategories: string[]
+}
+
+export type FinancialAnalysisChange = {
+  id: string
+  before: Pick<FinancialReportMovement, 'kind' | 'category' | 'name'>
+  after: Pick<FinancialReportMovement, 'kind' | 'category' | 'name'>
+}
+
+export type FinancialAnalysisProposal = {
+  movements: FinancialReportMovement[]
+  changes: FinancialAnalysisChange[]
+  newExpenseCategories: string[]
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+export const prepareFinancialAnalysisProposal = (
+  value: unknown,
+  currentMovements: FinancialReportMovement[],
+  existingExpenseCategories: string[],
+  currentCustomCategories: string[],
+): FinancialAnalysisProposal => {
+  if (!isRecord(value) || value.app !== 'GranaZen' || value.reportType !== 'financial-analysis' ||
+      value.formatVersion !== 1 || !Array.isArray(value.movements)) {
+    throw new Error('Arquivo incompatível. Use o relatório financeiro JSON original revisado pela IA.')
+  }
+
+  const currentById = new Map(currentMovements.map((movement) => [movement.id, movement]))
+  const proposedIds = new Set<string>()
+  const updates = new Map<string, Pick<FinancialReportMovement, 'kind' | 'category' | 'name'>>()
+  const newExpenseCategories = new Set<string>()
+  const knownCategories = new Set([...existingExpenseCategories, ...currentCustomCategories])
+
+  for (const [index, item] of value.movements.entries()) {
+    if (!isRecord(item) || typeof item.id !== 'string') {
+      throw new Error(`O movimento ${index + 1} não tem um ID válido.`)
+    }
+    const current = currentById.get(item.id)
+    if (!current) throw new Error(`O ID ${item.id} não pertence aos dados atuais. A IA não pode adicionar nem substituir transações.`)
+    if (proposedIds.has(item.id)) throw new Error(`O ID ${item.id} aparece mais de uma vez no arquivo.`)
+    proposedIds.add(item.id)
+
+    for (const field of ['date', 'amount', 'walletId', 'sourceId', 'createdAt'] as const) {
+      if (Object.hasOwn(item, field) && item[field] !== current[field]) {
+        throw new Error(`A IA alterou o campo protegido "${field}" do movimento ${item.id}. Valor, data, carteira e identificadores precisam permanecer iguais.`)
+      }
+    }
+
+    const name = item.name === undefined ? current.name : typeof item.name === 'string' ? item.name.trim() : ''
+    const kind = item.kind === undefined ? current.kind : item.kind
+    const category = item.category === undefined ? current.category : typeof item.category === 'string' ? item.category.trim() : ''
+    if (!name || name.length > 100 || !['expense', 'salary', 'extra'].includes(String(kind))) {
+      throw new Error(`Nome ou tipo inválido no movimento ${item.id}.`)
+    }
+    if (kind === 'salary' && category !== 'Salário' || kind === 'extra' && category !== 'Renda extra' ||
+        kind === 'expense' && (!category || category.length > 40)) {
+      throw new Error(`A categoria "${category}" não corresponde ao tipo do movimento ${item.id}.`)
+    }
+    if (kind === 'expense' && !knownCategories.has(category)) newExpenseCategories.add(category)
+    updates.set(item.id, { name, kind: kind as FinancialReportMovement['kind'], category })
+  }
+
+  if (currentCustomCategories.length + newExpenseCategories.size > 50) {
+    throw new Error('A proposta excede o limite de 50 categorias personalizadas.')
+  }
+
+  const movements = currentMovements.map((current) => ({ ...current, ...updates.get(current.id) }))
+  const changes = movements.flatMap((movement, index) => {
+    const current = currentMovements[index]
+    if (movement.name === current.name && movement.kind === current.kind && movement.category === current.category) return []
+    return [{
+      id: movement.id,
+      before: { name: current.name, kind: current.kind, category: current.category },
+      after: { name: movement.name, kind: movement.kind, category: movement.category },
+    }]
+  })
+
+  return { movements, changes, newExpenseCategories: [...newExpenseCategories] }
 }
 
 const normalizedName = (value: string) =>
