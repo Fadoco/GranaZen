@@ -56,6 +56,7 @@ import {
 } from './androidUpdate'
 import { pickBackupFile, saveBackupFile } from './backupFiles'
 import { isValidDateValue, matchesSearch, nextRecurringDueDate } from './financeUtils'
+import { createFinancialAnalysisReport } from './financialReport'
 import { parseStatementFile, selectNonDuplicateStatementEntries, type StatementEntry } from './statementImport'
 import type { Debt } from './financeTypes'
 import {
@@ -460,6 +461,8 @@ function App() {
   const profilePhotoInputRef = useRef<HTMLInputElement>(null)
   const [backupError, setBackupError] = useState('')
   const [backupStatus, setBackupStatus] = useState('')
+  const [analysisError, setAnalysisError] = useState('')
+  const [analysisStatus, setAnalysisStatus] = useState('')
   const [isProcessingBackup, setIsProcessingBackup] = useState(false)
   const backupInputRef = useRef<HTMLInputElement>(null)
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -504,7 +507,6 @@ function App() {
   const [movementDraft, setMovementDraft] = useState<MovementDraft>(emptyMovementDraft)
   const [movementTab, setMovementTab] = useState<'expenses' | 'income'>('expenses')
   const [androidUpdate, setAndroidUpdate] = useState<AndroidUpdate | null>(null)
-  const [isUpdatePromptOpen, setIsUpdatePromptOpen] = useState(false)
   const [installedAndroidAppVersion, setInstalledAndroidAppVersion] = useState('')
   const [installedAndroidAppVersionError, setInstalledAndroidAppVersionError] = useState('')
   const [isCheckingAndroidUpdate, setIsCheckingAndroidUpdate] = useState(isAndroidApp())
@@ -512,7 +514,6 @@ function App() {
   const [hasDownloadedAndroidUpdate, setHasDownloadedAndroidUpdate] = useState(false)
   const [androidUpdateStatus, setAndroidUpdateStatus] = useState('')
   const [androidUpdateError, setAndroidUpdateError] = useState('')
-  const dismissedUpdateVersion = useRef<string | null>(null)
   const lastReminderNotification = useRef('')
 
   useEffect(() => {
@@ -714,7 +715,6 @@ function App() {
         setAndroidUpdate(update)
         setHasDownloadedAndroidUpdate(false)
         setAndroidUpdateStatus(update ? '' : 'Você já está usando a versão mais recente.')
-        setIsUpdatePromptOpen(Boolean(update && dismissedUpdateVersion.current !== update.version))
       } catch (error) {
         if (!disposed) setAndroidUpdateError(error instanceof Error ? error.message : 'Não foi possível verificar atualizações.')
       } finally {
@@ -744,7 +744,6 @@ function App() {
       setAndroidUpdate(update)
       setHasDownloadedAndroidUpdate(false)
       setAndroidUpdateStatus('')
-      setIsUpdatePromptOpen(Boolean(update))
       if (!update) setAndroidUpdateStatus('Você já está usando a versão mais recente.')
     } catch (error) {
       console.error('Não foi possível verificar atualizações do GranaZen.', error)
@@ -770,7 +769,6 @@ function App() {
         setAndroidUpdateStatus('Permita que o GranaZen instale apps nesta tela de configurações. Depois, volte e toque em “Instalar atualização”.')
       } else {
         setAndroidUpdateStatus('Confirme a atualização na tela do Android.')
-        setIsUpdatePromptOpen(false)
       }
     } catch (error) {
       setAndroidUpdateError(error instanceof Error ? error.message : 'Não foi possível baixar ou iniciar a atualização.')
@@ -979,6 +977,41 @@ function App() {
     } catch (error) {
       console.error('Não foi possível exportar os dados do GranaZen.', error)
       setBackupError(error instanceof Error ? error.message : 'Não foi possível criar o arquivo de backup.')
+    } finally {
+      setIsProcessingBackup(false)
+    }
+  }
+
+  const exportFinancialAnalysis = async () => {
+    setAnalysisError('')
+    setAnalysisStatus('')
+    if (!debtsLoaded || !movementsLoaded || !extrasLoaded ||
+        !debtsStorageAvailable || !movementsStorageAvailable || !extrasStorageAvailable) {
+      setAnalysisError('Carregue seus dados financeiros sem erros antes de criar o relatório.')
+      return
+    }
+
+    setIsProcessingBackup(true)
+    try {
+      const report = createFinancialAnalysisReport({
+        movements,
+        debts,
+        wallets: extras.wallets,
+        budgets: extras.budgets,
+        goals: extras.goals,
+        customExpenseCategories: extras.customExpenseCategories,
+      })
+      const content = JSON.stringify(report, null, 2)
+      if (new TextEncoder().encode(content).byteLength > 20 * 1024 * 1024) {
+        throw new Error('O relatório excede o limite de 20 MB do seletor de arquivos Android.')
+      }
+      const saved = await saveBackupFile(content, `granazen-relatorio-financeiro-${localDateValue()}.json`)
+      setAnalysisStatus(saved
+        ? 'Relatório financeiro salvo. Confira as descrições e observações antes de compartilhá-lo.'
+        : 'Salvamento do relatório cancelado.')
+    } catch (error) {
+      console.error('Não foi possível exportar o relatório financeiro.', error)
+      setAnalysisError(error instanceof Error ? error.message : 'Não foi possível criar o relatório financeiro.')
     } finally {
       setIsProcessingBackup(false)
     }
@@ -2001,11 +2034,17 @@ function App() {
           <button className="secondary-button" type="button" onClick={() => void selectBackupFile()} disabled={isProcessingBackup}>
             <Upload size={16} /> Importar backup
           </button>
+          <button className="secondary-button" type="button" onClick={() => void exportFinancialAnalysis()} disabled={isProcessingBackup}>
+            <FileText size={16} /> {isProcessingBackup ? 'Aguarde…' : 'Exportar relatório para análise'}
+          </button>
           <input ref={backupInputRef} className="backup-file-input" type="file" accept=".json,application/json" onChange={(event) => void handleBackupFileChange(event)} />
         </div>
         <p className="backup-warning">A importação substitui os dados que estão neste aparelho. O arquivo não tem senha: guarde-o em um local privado.</p>
         {backupError && <p className="preferences-error" role="alert">{backupError}</p>}
         {backupStatus && <p className="backup-status" role="status">{backupStatus}</p>}
+        <p className="backup-warning">O relatório inclui transações, descrições, observações e nomes de carteiras, mas não inclui foto nem dados de contato do perfil. Revise-o antes de compartilhar.</p>
+        {analysisError && <p className="preferences-error" role="alert">{analysisError}</p>}
+        {analysisStatus && <p className="backup-status" role="status">{analysisStatus}</p>}
       </section>
         </div>
       </details>
@@ -2344,26 +2383,24 @@ function App() {
           </div>
         )}
 
-        {isAndroidApp() && androidUpdate && isUpdatePromptOpen && (
+        {isAndroidApp() && (isCheckingAndroidUpdate || androidUpdate) && (
           <div className="update-prompt-backdrop" role="presentation">
-            <section className="update-prompt" role="alertdialog" aria-modal="true" aria-labelledby="update-prompt-title" aria-describedby="update-prompt-description">
+            <section className="update-prompt" role="alertdialog" aria-modal="true" aria-busy={isCheckingAndroidUpdate} aria-labelledby="update-prompt-title" aria-describedby="update-prompt-description">
               <div className="update-prompt-top">
                 <span className="update-prompt-icon"><Download size={21} /></span>
-                <span className="update-prompt-badge">NOVA VERSÃO</span>
+                <span className="update-prompt-badge">{androidUpdate ? 'ATUALIZAÇÃO OBRIGATÓRIA' : 'VERIFICAÇÃO'}</span>
               </div>
-              <h2 id="update-prompt-title">Atualização disponível</h2>
-              <p id="update-prompt-description">O GranaZen <strong>{androidUpdate.version}</strong> está pronto para instalar.</p>
-              {androidUpdate.notes && <details className="update-prompt-notes"><summary>O que mudou nesta versão</summary><p>{androidUpdate.notes}</p></details>}
+              <h2 id="update-prompt-title">{androidUpdate ? 'Atualização necessária' : 'Verificando atualizações'}</h2>
+              <p id="update-prompt-description">{androidUpdate
+                ? <>Para continuar usando o GranaZen, instale a versão <strong>{androidUpdate.version}</strong>.</>
+                : 'Aguarde enquanto verificamos se há uma versão nova do aplicativo.'}</p>
+              {androidUpdate?.notes && <details className="update-prompt-notes"><summary>O que mudou nesta versão</summary><p>{androidUpdate.notes}</p></details>}
               {androidUpdateStatus && <p className="update-prompt-status" role="status">{androidUpdateStatus}</p>}
               {androidUpdateError && <p className="update-prompt-error" role="alert">{androidUpdateError}</p>}
-              <button className="primary-button update-install-button" type="button" onClick={() => void installAndroidUpdate()} disabled={isDownloadingAndroidUpdate}>
+              {androidUpdate && <button className="primary-button update-install-button" type="button" onClick={() => void installAndroidUpdate()} disabled={isDownloadingAndroidUpdate}>
                 <Download size={17} />
                 {isDownloadingAndroidUpdate ? 'Baixando atualização…' : hasDownloadedAndroidUpdate ? 'Instalar atualização' : 'Atualizar agora'}
-              </button>
-              <button className="update-prompt-later" type="button" onClick={() => {
-                dismissedUpdateVersion.current = androidUpdate.version
-                setIsUpdatePromptOpen(false)
-              }} disabled={isDownloadingAndroidUpdate}>Decidir depois</button>
+              </button>}
             </section>
           </div>
         )}

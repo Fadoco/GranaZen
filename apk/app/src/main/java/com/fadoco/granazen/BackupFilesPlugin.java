@@ -25,7 +25,7 @@ public class BackupFilesPlugin extends Plugin {
     public void saveBackup(PluginCall call) {
         String content = call.getString("content");
         String fileName = call.getString("fileName");
-        if (content == null || fileName == null || !fileName.matches("granazen-backup-[0-9-]+\\.json")) {
+        if (content == null || fileName == null || !fileName.matches("granazen-(?:backup|relatorio-financeiro)-[0-9-]+\\.json")) {
             call.reject("Os dados ou o nome do arquivo de backup são inválidos.");
             return;
         }

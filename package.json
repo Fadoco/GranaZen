@@ -14,7 +14,7 @@
     "build:android:release": "npm run build && npx cap sync android && cd apk && gradlew.bat assembleRelease",
     "sync:android": "npm run build && npx cap sync android",
     "open:android": "npx cap open android",
-    "test:finance": "node --test scripts/finance-utils.test.mjs scripts/statement-import.test.mjs",
+    "test:finance": "node --test scripts/finance-utils.test.mjs scripts/statement-import.test.mjs scripts/financial-report.test.mjs",
     "test:release-version": "node --test scripts/check-android-release-version.test.mjs scripts/prepare-android-release.test.mjs",
     "preview": "vite preview"
   },

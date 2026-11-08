@@ -46,6 +46,8 @@ As estimativas e saldos são calculados a partir dos dados informados no GranaZe
 
 - Importar extratos **CSV**, **OFX** ou **PDF com texto selecionável**: o app mostra uma prévia e ignora lançamentos já importados, inclusive ao selecionar o mesmo arquivo novamente. PDFs escaneados como imagem não têm extração OCR.
 - Exportar e restaurar um backup JSON com perfil, preferências, carteiras, categorias, metas, orçamentos, contas e movimentações.
+- Exportar um relatório financeiro JSON para análise assistida, com transações, resumos mensais, carteiras, dívidas e possíveis duplicados. O relatório não inclui foto nem dados de contato do perfil.
+- Exportar um relatório financeiro JSON para análise assistida, com transações, resumos mensais, carteiras, dívidas e possíveis duplicados. O relatório não inclui foto nem dados de contato do perfil.
 - Usar o aplicativo offline depois que a versão web tiver sido carregada e armazenada no dispositivo.
 - Ocultar valores, escolher tema e cor, aumentar o tamanho de leitura e usar a navegação por teclado.
 
@@ -61,7 +63,7 @@ O painel destaca contas vencidas e as que vencem nos próximos sete dias. Na ver
 2. No Android, abra o arquivo baixado e permita a instalação desta fonte, se o sistema solicitar.
 3. Confirme a instalação. Para atualizações futuras, instale os APKs publicados pelo mesmo projeto.
 
-O Android pode mostrar um aviso por se tratar de uma instalação fora da Play Store. Baixe o arquivo apenas deste repositório oficial. No app Android, a seção **Mais** mostra a versão instalada e permite verificar atualizações; quando uma nova versão é detectada, aparece um aviso na tela com a opção de baixar e instalar.
+O Android pode mostrar um aviso por se tratar de uma instalação fora da Play Store. Baixe o arquivo apenas deste repositório oficial. No app Android, a seção **Mais** mostra a versão instalada e permite verificar atualizações. Ao abrir, se uma nova versão for detectada, o app bloqueia o uso até iniciar a instalação; o Android ainda solicita a confirmação do usuário no instalador do sistema.
 
 ## Privacidade e armazenamento
 

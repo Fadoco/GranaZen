@@ -161,6 +161,8 @@ Implementação de serialização/validação no `src/App.tsx`; abstração de a
 - No Android, o plugin utiliza o seletor de documento do sistema para criar ou escolher arquivos JSON. Na Web, exportação cria um Blob e inicia download; importação usa seletor de arquivo HTML.
 - Cancelar a escolha/salvamento não deve ser interpretado como erro de conteúdo.
 - O arquivo não é criptografado. O usuário deve armazená-lo em local privado; o backup inclui foto de perfil, perfil e dados financeiros.
+- Além do backup restaurável, a tela Mais exporta `granazen-relatorio-financeiro-YYYY-MM-DD.json` para análise assistida. A versão 1 contém transações e observações completas, dívidas, carteiras com saldos calculados, orçamentos, metas, totais por mês e grupos heurísticos de possíveis duplicados. Não inclui foto, dados de contato, preferências nem credenciais. Descrições, observações e nomes de carteiras podem conter informações pessoais; revise antes de compartilhar. O relatório não é importável como backup.
+- Além do backup restaurável, a tela Mais exporta `granazen-relatorio-financeiro-YYYY-MM-DD.json` para análise assistida. A versão 1 contém transações e observações completas, dívidas, carteiras com saldos calculados, orçamentos, metas, totais por mês e grupos heurísticos de possíveis duplicados. Não inclui foto, dados de contato, preferências nem credenciais. Descrições, observações e nomes de carteiras podem conter informações pessoais; revise antes de compartilhar. O relatório não é importável como backup.
 
 ### 4.9 Lembretes de vencimento
 
@@ -178,7 +180,7 @@ Implementação de serialização/validação no `src/App.tsx`; abstração de a
 - Valida `version`, `versionCode`, SHA-256 de 64 hexadecimais e URL fixa do APK do projeto com `?v=<versionCode>`. Se a versão remota não for mais nova, não oferece atualização.
 - APK é baixado para cache interno do app; Java valida host de destino após redirects, tamanho máximo 100 MB, calcula SHA-256 e recusa arquivo cujo hash não corresponde ao manifesto.
 - Instalação usa `FileProvider` e o instalador do Android. Android 8+ pode exigir que o usuário permita instalação de fontes desconhecidas para o GranaZen.
-- O prompt automático usa `role="alertdialog"` e oferece atualização ou “Decidir depois”; a seção Mais do código local pode mostrar versão instalada, estado, erros e verificação manual.
+- Ao abrir, a tela Android bloqueia o uso durante a verificação de atualização e, se houver versão nova, mantém um `role="alertdialog"` obrigatório até a instalação; não há opção de adiamento. O instalador do Android ainda exige confirmação do usuário. Se a consulta remota falhar, o app informa o erro nas configurações e permite o uso normal até ser possível verificar novamente. A seção Mais do código local mostra versão instalada, estado, erros e verificação manual.
 - Integridade SHA-256 detecta corrupção/mismatch; a compatibilidade/autenticidade de atualização também depende da assinatura Android permanente. Não trocar o keystore de release.
 
 ## 5. Modelo de estado e armazenamento
@@ -242,6 +244,8 @@ O componente principal é `src/App.tsx`. Domínio, validações, estados de inte
 | `src/styles.css` | Identidade visual, layouts, responsividade, temas, acessibilidade e diálogos. |
 | `src/financeTypes.ts` | Tipo `Debt`, compartilhado com lembretes. Outros modelos funcionais estão definidos localmente no App. |
 | `src/financeUtils.ts` | Validação de datas ISO, busca sem acentos/caixa, avanço mensal de vencimento. |
+| `src/financialReport.ts` | Serialização financeira e geração de resumos e checagens para análise assistida. |
+| `src/financialReport.ts` | Serialização financeira e geração de resumos e checagens para análise assistida. |
 | `src/statementImport.ts` | Parser CSV/OFX, normalização de linhas PDF e validação/conversão para lançamentos. |
 | `src/pdfStatementImport.ts` | Extração local de texto e ordenação dos itens por página em PDFs. |
 | `src/backupFiles.ts` | Adaptador de seleção/salvamento por Capacitor no Android e Blob no browser. |
@@ -350,6 +354,8 @@ O keystore é o segredo de longo prazo da identidade Android. Deve existir backu
 
 - `scripts/finance-utils.test.mjs`: datas válidas/inválidas, leap day, busca sem acentos/caixa e progressão mensal em mês curto/virada de ano.
 - `scripts/statement-import.test.mjs`: CSV com delimitador/aspas/decimais, OFX, texto extraído de PDF, colunas/datas inválidas, extensão, aspas sem fechamento e limite de tamanho.
+- `scripts/financial-report.test.mjs`: totais, resumo mensal, saldos de carteiras, dados financeiros completos e exclusão de campos do perfil no relatório.
+- `scripts/financial-report.test.mjs`: totais, resumo mensal, saldos de carteiras, dados financeiros completos e exclusão de campos do perfil no relatório.
 - `scripts/check-android-release-version.test.mjs`: parser Gradle, aceitação e rejeição de versão não crescente.
 - `scripts/prepare-android-release.test.mjs`: primeira versão, incremento de patch/versionCode e validação de entrada.
 - Não há suíte automatizada de componentes UI ou testes end-to-end identificados. Mudanças em fluxos de UI devem ser validadas com build e verificação manual dirigida.
