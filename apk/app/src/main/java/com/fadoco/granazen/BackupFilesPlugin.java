@@ -24,25 +24,24 @@ import java.util.concurrent.ConcurrentHashMap;
 @CapacitorPlugin(name = "BackupFiles")
 public class BackupFilesPlugin extends Plugin {
     private static final int MAX_BACKUP_BYTES = 20 * 1024 * 1024;
-    private final Map<String, FinancialReportSession> financialReportSessions = new ConcurrentHashMap<>();
+    private final Map<String, FileSaveSession> fileSaveSessions = new ConcurrentHashMap<>();
 
-    private static final class FinancialReportSession {
+    private static final class FileSaveSession {
         private final Uri uri;
         private final OutputStream output;
         private int bytesWritten;
 
-        private FinancialReportSession(Uri uri, OutputStream output) {
+        private FileSaveSession(Uri uri, OutputStream output) {
             this.uri = uri;
             this.output = output;
         }
     }
 
     @PluginMethod
-    public void saveBackup(PluginCall call) {
-        String content = call.getString("content");
+    public void beginBackup(PluginCall call) {
         String fileName = call.getString("fileName");
-        if (content == null || fileName == null || !fileName.matches("granazen-backup-[0-9-]+\\.json")) {
-            call.reject("Os dados ou o nome do arquivo de backup são inválidos.");
+        if (fileName == null || !fileName.matches("granazen-backup-[0-9-]+\\.json")) {
+            call.reject("O nome do arquivo de backup é inválido.");
             return;
         }
 
@@ -50,7 +49,7 @@ public class BackupFilesPlugin extends Plugin {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/json");
         intent.putExtra(Intent.EXTRA_TITLE, fileName);
-        startActivityForResult(call, intent, "saveBackupResult");
+        startActivityForResult(call, intent, "beginBackupResult");
     }
 
     @PluginMethod
@@ -70,6 +69,15 @@ public class BackupFilesPlugin extends Plugin {
 
     @ActivityCallback
     private void beginFinancialReportResult(PluginCall call, ActivityResult result) {
+        beginFileSaveResult(call, result, "Não foi possível preparar o arquivo do relatório.");
+    }
+
+    @ActivityCallback
+    private void beginBackupResult(PluginCall call, ActivityResult result) {
+        beginFileSaveResult(call, result, "Não foi possível preparar o arquivo de backup.");
+    }
+
+    private void beginFileSaveResult(PluginCall call, ActivityResult result, String errorMessage) {
         if (call == null) return;
         Intent data = result.getData();
         if (result.getResultCode() != android.app.Activity.RESULT_OK || data == null || data.getData() == null) {
@@ -84,23 +92,32 @@ public class BackupFilesPlugin extends Plugin {
             OutputStream output = getContext().getContentResolver().openOutputStream(uri, "w");
             if (output == null) throw new IllegalStateException("Não foi possível abrir o arquivo escolhido.");
             String sessionId = UUID.randomUUID().toString();
-            financialReportSessions.put(sessionId, new FinancialReportSession(uri, output));
+            fileSaveSessions.put(sessionId, new FileSaveSession(uri, output));
             JSObject selected = new JSObject();
             selected.put("status", "selected");
             selected.put("sessionId", sessionId);
             call.resolve(selected);
         } catch (Exception exception) {
             deleteDocument(uri);
-            call.reject("Não foi possível preparar o arquivo do relatório.", exception);
+            call.reject(errorMessage, exception);
         }
     }
 
     @PluginMethod
     public void writeFinancialReportChunk(PluginCall call) {
+        writeFileSaveChunk(call);
+    }
+
+    @PluginMethod
+    public void writeBackupChunk(PluginCall call) {
+        writeFileSaveChunk(call);
+    }
+
+    private void writeFileSaveChunk(PluginCall call) {
         String sessionId = call.getString("sessionId");
         String content = call.getString("content");
         boolean finish = Boolean.TRUE.equals(call.getBoolean("finish", false));
-        FinancialReportSession session = sessionId == null ? null : financialReportSessions.get(sessionId);
+        FileSaveSession session = sessionId == null ? null : fileSaveSessions.get(sessionId);
         if (session == null || content == null) {
             call.reject("A sessão de gravação do relatório não está disponível.");
             return;
@@ -117,30 +134,39 @@ public class BackupFilesPlugin extends Plugin {
                 if (finish) {
                     session.output.flush();
                     session.output.close();
-                    financialReportSessions.remove(sessionId, session);
+                    fileSaveSessions.remove(sessionId, session);
                 }
             }
             JSObject result = new JSObject();
             result.put("status", finish ? "saved" : "writing");
             call.resolve(result);
         } catch (Exception exception) {
-            discardFinancialReport(sessionId, session);
-            call.reject("Não foi possível concluir o relatório financeiro. O arquivo incompleto foi removido quando possível.", exception);
+            discardFileSave(sessionId, session);
+            call.reject("Não foi possível concluir a gravação. O arquivo incompleto foi removido quando possível.", exception);
         }
     }
 
     @PluginMethod
     public void cancelFinancialReport(PluginCall call) {
+        cancelFileSave(call);
+    }
+
+    @PluginMethod
+    public void cancelBackup(PluginCall call) {
+        cancelFileSave(call);
+    }
+
+    private void cancelFileSave(PluginCall call) {
         String sessionId = call.getString("sessionId");
         if (sessionId != null) {
-            FinancialReportSession session = financialReportSessions.get(sessionId);
-            if (session != null) discardFinancialReport(sessionId, session);
+            FileSaveSession session = fileSaveSessions.get(sessionId);
+            if (session != null) discardFileSave(sessionId, session);
         }
         call.resolve();
     }
 
-    private void discardFinancialReport(String sessionId, FinancialReportSession session) {
-        if (!financialReportSessions.remove(sessionId, session)) return;
+    private void discardFileSave(String sessionId, FileSaveSession session) {
+        if (!fileSaveSessions.remove(sessionId, session)) return;
         synchronized (session) {
             try {
                 session.output.close();
@@ -154,35 +180,6 @@ public class BackupFilesPlugin extends Plugin {
         try {
             DocumentsContract.deleteDocument(getContext().getContentResolver(), uri);
         } catch (Exception ignored) {
-        }
-    }
-
-    @ActivityCallback
-    private void saveBackupResult(PluginCall call, ActivityResult result) {
-        if (call == null) return;
-        Intent data = result.getData();
-        if (result.getResultCode() != android.app.Activity.RESULT_OK || data == null || data.getData() == null) {
-            JSObject cancelled = new JSObject();
-            cancelled.put("status", "cancelled");
-            call.resolve(cancelled);
-            return;
-        }
-
-        String content = call.getString("content");
-        if (content == null || content.getBytes(StandardCharsets.UTF_8).length > MAX_BACKUP_BYTES) {
-            call.reject("O arquivo de backup excede o tamanho permitido.");
-            return;
-        }
-
-        try (OutputStream output = getContext().getContentResolver().openOutputStream(data.getData(), "w")) {
-            if (output == null) throw new IllegalStateException("Não foi possível abrir o arquivo escolhido.");
-            output.write(content.getBytes(StandardCharsets.UTF_8));
-            output.flush();
-            JSObject saved = new JSObject();
-            saved.put("status", "saved");
-            call.resolve(saved);
-        } catch (Exception exception) {
-            call.reject("Não foi possível salvar o arquivo de backup.", exception);
         }
     }
 

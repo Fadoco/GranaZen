@@ -1,7 +1,9 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 
 type BackupFilesPlugin = {
-  saveBackup(options: { content: string; fileName: string }): Promise<{ status: 'saved' | 'cancelled' }>
+  beginBackup(options: { fileName: string }): Promise<{ status: 'selected' | 'cancelled'; sessionId?: string }>
+  writeBackupChunk(options: { sessionId: string; content: string; finish: boolean }): Promise<void>
+  cancelBackup(options: { sessionId: string }): Promise<void>
   beginFinancialReport(options: { fileName: string }): Promise<{ status: 'selected' | 'cancelled'; sessionId?: string }>
   writeFinancialReportChunk(options: { sessionId: string; content: string; finish: boolean }): Promise<void>
   cancelFinancialReport(options: { sessionId: string }): Promise<void>
@@ -10,29 +12,11 @@ type BackupFilesPlugin = {
 
 const backupFilesPlugin = registerPlugin<BackupFilesPlugin>('BackupFiles')
 
-export const saveBackupFile = async (content: string, fileName: string) => {
-  if (Capacitor.getPlatform() === 'android') {
-    const result = await backupFilesPlugin.saveBackup({ content, fileName })
-    return result.status === 'saved'
-  }
-
-  const file = new Blob([content], { type: 'application/json;charset=utf-8' })
-  const url = URL.createObjectURL(file)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = fileName
-  document.body.append(link)
-  link.click()
-  link.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-  return true
-}
-
-const REPORT_MAX_BYTES = 20 * 1024 * 1024
-const REPORT_CHUNK_CHARACTERS = 8 * 1024
+const MAX_FILE_BYTES = 20 * 1024 * 1024
+const FILE_CHUNK_CHARACTERS = 8 * 1024
 
 const nextChunkEnd = (content: string, offset: number) => {
-  let end = Math.min(offset + REPORT_CHUNK_CHARACTERS, content.length)
+  let end = Math.min(offset + FILE_CHUNK_CHARACTERS, content.length)
   if (end < content.length) {
     const lastCharacter = content.charCodeAt(end - 1)
     const nextCharacter = content.charCodeAt(end)
@@ -52,6 +36,62 @@ const getUtf8ByteLength = (content: string) => {
   return byteLength
 }
 
+const saveAndroidFileInChunks = async (
+  content: string,
+  fileName: string,
+  begin: (options: { fileName: string }) => Promise<{ status: 'selected' | 'cancelled'; sessionId?: string }>,
+  writeChunk: (options: { sessionId: string; content: string; finish: boolean }) => Promise<void>,
+  cancel: (options: { sessionId: string }) => Promise<void>,
+) => {
+  if (getUtf8ByteLength(content) > MAX_FILE_BYTES) {
+    throw new Error('O arquivo excede o limite de 20 MB para exportação no Android.')
+  }
+
+  const session = await begin({ fileName })
+  if (session.status === 'cancelled') return false
+  if (!session.sessionId) throw new Error('O Android não iniciou a gravação do arquivo.')
+
+  try {
+    if (!content.length) await writeChunk({ sessionId: session.sessionId, content: '', finish: true })
+    for (let offset = 0; offset < content.length;) {
+      const end = nextChunkEnd(content, offset)
+      await writeChunk({
+        sessionId: session.sessionId,
+        content: content.slice(offset, end),
+        finish: end === content.length,
+      })
+      offset = end
+    }
+    return true
+  } catch (error) {
+    await cancel({ sessionId: session.sessionId }).catch(() => undefined)
+    throw error
+  }
+}
+
+export const saveBackupFile = async (content: string, fileName: string) => {
+  if (Capacitor.getPlatform() === 'android') {
+    return saveAndroidFileInChunks(
+      content,
+      fileName,
+      backupFilesPlugin.beginBackup,
+      backupFilesPlugin.writeBackupChunk,
+      backupFilesPlugin.cancelBackup,
+    )
+  }
+
+  const file = new Blob([content], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(file)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.append(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  return true
+}
+
 export const saveFinancialReportFile = async (content: string, fileName: string) => {
   if (Capacitor.getPlatform() !== 'android') {
     const file = new Blob([content], { type: 'application/json;charset=utf-8' })
@@ -66,32 +106,13 @@ export const saveFinancialReportFile = async (content: string, fileName: string)
     return true
   }
 
-  if (getUtf8ByteLength(content) > REPORT_MAX_BYTES) {
-    throw new Error('O relatório excede o limite de 20 MB para exportação no Android.')
-  }
-
-  const session = await backupFilesPlugin.beginFinancialReport({ fileName })
-  if (session.status === 'cancelled') return false
-  if (!session.sessionId) throw new Error('O Android não iniciou a gravação do relatório.')
-
-  try {
-    if (!content.length) {
-      await backupFilesPlugin.writeFinancialReportChunk({ sessionId: session.sessionId, content: '', finish: true })
-    }
-    for (let offset = 0; offset < content.length;) {
-      const end = nextChunkEnd(content, offset)
-      await backupFilesPlugin.writeFinancialReportChunk({
-        sessionId: session.sessionId,
-        content: content.slice(offset, end),
-        finish: end === content.length,
-      })
-      offset = end
-    }
-    return true
-  } catch (error) {
-    await backupFilesPlugin.cancelFinancialReport({ sessionId: session.sessionId }).catch(() => undefined)
-    throw error
-  }
+  return saveAndroidFileInChunks(
+    content,
+    fileName,
+    backupFilesPlugin.beginFinancialReport,
+    backupFilesPlugin.writeFinancialReportChunk,
+    backupFilesPlugin.cancelFinancialReport,
+  )
 }
 
 export const pickBackupFile = async (): Promise<string | null> => {

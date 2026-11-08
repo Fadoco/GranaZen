@@ -1,4 +1,5 @@
 import type { Debt } from './financeTypes.ts'
+import { isValidDateValue } from './financeUtils.ts'
 
 export type FinancialReportMovement = {
   id: string
@@ -34,8 +35,9 @@ export type FinancialAnalysisInput = {
 
 export type FinancialAnalysisChange = {
   id: string
-  before: Pick<FinancialReportMovement, 'kind' | 'category' | 'name'>
-  after: Pick<FinancialReportMovement, 'kind' | 'category' | 'name'>
+  action: 'updated' | 'added' | 'removed'
+  before: Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId'> | null
+  after: Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId'> | null
 }
 
 export type FinancialAnalysisProposal = {
@@ -43,6 +45,9 @@ export type FinancialAnalysisProposal = {
   changes: FinancialAnalysisChange[]
   newExpenseCategories: string[]
 }
+
+type EditableMovementFields = Pick<FinancialReportMovement, 'kind' | 'category' | 'name' | 'amount' | 'date' | 'notes' | 'walletId'>
+const editableMovementFields = ['kind', 'category', 'name', 'amount', 'date', 'notes', 'walletId'] as const
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -52,6 +57,7 @@ export const prepareFinancialAnalysisProposal = (
   currentMovements: FinancialReportMovement[],
   existingExpenseCategories: string[],
   currentCustomCategories: string[],
+  currentWalletIds: string[] = [],
 ): FinancialAnalysisProposal => {
   if (!isRecord(value) || value.app !== 'GranaZen' || value.reportType !== 'financial-analysis' ||
       value.formatVersion !== 1 || !Array.isArray(value.movements)) {
@@ -60,53 +66,109 @@ export const prepareFinancialAnalysisProposal = (
 
   const currentById = new Map(currentMovements.map((movement) => [movement.id, movement]))
   const proposedIds = new Set<string>()
-  const updates = new Map<string, Pick<FinancialReportMovement, 'kind' | 'category' | 'name'>>()
+  const updates = new Map<string, EditableMovementFields>()
+  const additions: FinancialReportMovement[] = []
   const newExpenseCategories = new Set<string>()
   const knownCategories = new Set([...existingExpenseCategories, ...currentCustomCategories])
+  const removedIdsValue = value.removeMovementIds ?? []
+  if (!Array.isArray(removedIdsValue) || removedIdsValue.some((id) => typeof id !== 'string')) {
+    throw new Error('A lista de movimentos para remover está inválida.')
+  }
+  const removedIds = new Set(removedIdsValue as string[])
+  if (removedIds.size !== removedIdsValue.length) throw new Error('Há IDs repetidos na lista de movimentos para remover.')
+  for (const id of removedIds) {
+    if (!currentById.has(id)) throw new Error(`O movimento ${id} não existe nos dados atuais e não pode ser removido.`)
+  }
 
   for (const [index, item] of value.movements.entries()) {
     if (!isRecord(item) || typeof item.id !== 'string') {
       throw new Error(`O movimento ${index + 1} não tem um ID válido.`)
     }
     const current = currentById.get(item.id)
-    if (!current) throw new Error(`O ID ${item.id} não pertence aos dados atuais. A IA não pode adicionar nem substituir transações.`)
+    if (removedIds.has(item.id)) throw new Error(`O movimento ${item.id} não pode ser editado e removido ao mesmo tempo.`)
     if (proposedIds.has(item.id)) throw new Error(`O ID ${item.id} aparece mais de uma vez no arquivo.`)
     proposedIds.add(item.id)
 
-    for (const field of ['date', 'amount', 'walletId', 'sourceId', 'createdAt'] as const) {
-      if (Object.hasOwn(item, field) && item[field] !== current[field]) {
-        throw new Error(`A IA alterou o campo protegido "${field}" do movimento ${item.id}. Valor, data, carteira e identificadores precisam permanecer iguais.`)
+    if (current) {
+      for (const field of ['sourceId', 'createdAt'] as const) {
+        if (Object.hasOwn(item, field) && item[field] !== current[field]) {
+          throw new Error(`O identificador protegido "${field}" do movimento ${item.id} não pode ser alterado.`)
+        }
       }
     }
 
-    const name = item.name === undefined ? current.name : typeof item.name === 'string' ? item.name.trim() : ''
-    const kind = item.kind === undefined ? current.kind : item.kind
-    const category = item.category === undefined ? current.category : typeof item.category === 'string' ? item.category.trim() : ''
+    const name = item.name === undefined ? current?.name ?? '' : typeof item.name === 'string' ? item.name.trim() : ''
+    const kind = item.kind === undefined ? current?.kind : item.kind
+    const category = item.category === undefined ? current?.category ?? '' : typeof item.category === 'string' ? item.category.trim() : ''
+    const amount = item.amount === undefined ? current?.amount : item.amount
+    const date = item.date === undefined ? current?.date ?? '' : item.date
+    const notes = item.notes === undefined ? current?.notes ?? '' : typeof item.notes === 'string' ? item.notes.trim() : ''
+    const walletId = item.walletId === undefined ? current?.walletId ?? null : item.walletId
     if (!name || name.length > 100 || !['expense', 'salary', 'extra'].includes(String(kind))) {
       throw new Error(`Nome ou tipo inválido no movimento ${item.id}.`)
+    }
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
+      throw new Error(`O valor do movimento ${item.id} precisa ser um número positivo.`)
+    }
+    if (!isValidDateValue(date)) {
+      throw new Error(`A data do movimento ${item.id} é inválida.`)
+    }
+    if (typeof notes !== 'string' || notes.length > 1000) throw new Error(`A observação do movimento ${item.id} é inválida.`)
+    if (walletId !== null && typeof walletId !== 'string') throw new Error(`A carteira do movimento ${item.id} é inválida.`)
+    if (walletId && currentWalletIds.length && !currentWalletIds.includes(walletId)) {
+      throw new Error(`A carteira do movimento ${item.id} não existe nos dados atuais.`)
     }
     if (kind === 'salary' && category !== 'Salário' || kind === 'extra' && category !== 'Renda extra' ||
         kind === 'expense' && (!category || category.length > 40)) {
       throw new Error(`A categoria "${category}" não corresponde ao tipo do movimento ${item.id}.`)
     }
     if (kind === 'expense' && !knownCategories.has(category)) newExpenseCategories.add(category)
-    updates.set(item.id, { name, kind: kind as FinancialReportMovement['kind'], category })
+    const fields: EditableMovementFields = {
+      name,
+      kind: kind as FinancialReportMovement['kind'],
+      category,
+      amount,
+      date,
+      notes,
+      walletId,
+    }
+    if (current) updates.set(item.id, fields)
+    else {
+      additions.push({
+        ...fields,
+        id: item.id,
+        ...(typeof item.sourceId === 'string' ? { sourceId: item.sourceId } : {}),
+        createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
+      })
+    }
   }
 
   if (currentCustomCategories.length + newExpenseCategories.size > 50) {
     throw new Error('A proposta excede o limite de 50 categorias personalizadas.')
   }
 
-  const movements = currentMovements.map((current) => ({ ...current, ...updates.get(current.id) }))
-  const changes = movements.flatMap((movement, index) => {
-    const current = currentMovements[index]
-    if (movement.name === current.name && movement.kind === current.kind && movement.category === current.category) return []
-    return [{
-      id: movement.id,
-      before: { name: current.name, kind: current.kind, category: current.category },
-      after: { name: movement.name, kind: movement.kind, category: movement.category },
-    }]
+  const snapshot = (movement: FinancialReportMovement): EditableMovementFields => ({
+    name: movement.name,
+    kind: movement.kind,
+    category: movement.category,
+    amount: movement.amount,
+    date: movement.date,
+    notes: movement.notes,
+    walletId: movement.walletId ?? null,
   })
+  const updatedMovements = currentMovements
+    .filter((movement) => !removedIds.has(movement.id))
+    .map((current) => ({ ...current, ...updates.get(current.id) }))
+  const movements = [...updatedMovements, ...additions]
+  const changes: FinancialAnalysisChange[] = [
+    ...currentMovements.flatMap((current): FinancialAnalysisChange[] => {
+      if (removedIds.has(current.id)) return [{ id: current.id, action: 'removed' as const, before: snapshot(current), after: null }]
+      const after = updates.get(current.id)
+      if (!after || editableMovementFields.every((field) => after[field] === snapshot(current)[field])) return []
+      return [{ id: current.id, action: 'updated' as const, before: snapshot(current), after }]
+    }),
+    ...additions.map((movement): FinancialAnalysisChange => ({ id: movement.id, action: 'added', before: null, after: snapshot(movement) })),
+  ]
 
   return { movements, changes, newExpenseCategories: [...newExpenseCategories] }
 }

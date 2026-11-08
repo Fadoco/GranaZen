@@ -66,7 +66,7 @@ import {
   supportsNativeReminders,
 } from './localReminders'
 
-type Section = 'inicio' | 'movimentos' | 'contas' | 'dividas' | 'calendario' | 'historico' | 'analise' | 'mais'
+type Section = 'inicio' | 'movimentos' | 'contas' | 'dividas' | 'calendario' | 'historico' | 'mais'
 type Theme = 'system' | 'light' | 'dark'
 type Accent = 'forest' | 'ocean' | 'plum'
 type Preferences = { theme: Theme; textSize: 'normal' | 'large'; hideAmounts: boolean; accent: Accent }
@@ -158,7 +158,6 @@ const navigation: { id: Section; label: string; icon: typeof House }[] = [
   { id: 'dividas', label: 'Dívidas', icon: ArrowLeftRight },
   { id: 'calendario', label: 'Calendário', icon: CalendarRange },
   { id: 'historico', label: 'Histórico', icon: History },
-  { id: 'analise', label: 'Análise', icon: ChartNoAxesColumnIncreasing },
   { id: 'mais', label: 'Mais', icon: Settings },
 ]
 
@@ -169,7 +168,6 @@ const sectionTitles: Record<Section, string> = {
   dividas: 'Dívidas e empréstimos',
   calendario: 'Calendário financeiro',
   historico: 'Histórico financeiro',
-  analise: 'Análise financeira',
   mais: 'Personalização',
 }
 
@@ -468,6 +466,7 @@ function App() {
   const [backupStatus, setBackupStatus] = useState('')
   const [analysisError, setAnalysisError] = useState('')
   const [analysisStatus, setAnalysisStatus] = useState('')
+  const [analysisBackupConfirmed, setAnalysisBackupConfirmed] = useState(false)
   const [isReadingAnalysisProposal, setIsReadingAnalysisProposal] = useState(false)
   const [analysisProposal, setAnalysisProposal] = useState<FinancialAnalysisProposal | null>(null)
   const analysisInputRef = useRef<HTMLInputElement>(null)
@@ -722,9 +721,9 @@ function App() {
         setAndroidUpdateError('')
         setAndroidUpdate(update)
         setHasDownloadedAndroidUpdate(false)
-        setAndroidUpdateStatus(update ? '' : 'Você já está usando a versão mais recente.')
+        setAndroidUpdateStatus('')
       } catch (error) {
-        if (!disposed) setAndroidUpdateError(error instanceof Error ? error.message : 'Não foi possível verificar atualizações.')
+        if (!disposed) console.info('A verificação automática de atualização não foi concluída.', error)
       } finally {
         if (!disposed) setIsCheckingAndroidUpdate(false)
       }
@@ -1034,7 +1033,14 @@ function App() {
     try {
       if (file.size > 20 * 1024 * 1024) throw new Error('O arquivo excede o limite de 20 MB.')
       const content: unknown = JSON.parse(await file.text())
-      const proposal = prepareFinancialAnalysisProposal(content, movements, allExpenseCategories, extras.customExpenseCategories)
+      if (!analysisBackupConfirmed) throw new Error('Exporte e guarde um backup atualizado antes de importar correções.')
+      const proposal = prepareFinancialAnalysisProposal(
+        content,
+        movements,
+        allExpenseCategories,
+        extras.customExpenseCategories,
+        extras.wallets.map((wallet) => wallet.id),
+      )
       if (!proposal.changes.length) {
         setAnalysisStatus('A IA não propôs alterações organizacionais para os movimentos enviados.')
         return
@@ -1050,6 +1056,10 @@ function App() {
 
   const applyFinancialAnalysisProposal = () => {
     if (!analysisProposal) return
+    if (!analysisBackupConfirmed) {
+      setAnalysisError('Exporte e guarde um backup atualizado antes de aplicar correções.')
+      return
+    }
     setMovements(analysisProposal.movements)
     if (analysisProposal.newExpenseCategories.length) {
       setExtras((current) => ({
@@ -1057,9 +1067,10 @@ function App() {
         customExpenseCategories: [...current.customExpenseCategories, ...analysisProposal.newExpenseCategories],
       }))
     }
-    setAnalysisStatus(`${analysisProposal.changes.length} lançamento${analysisProposal.changes.length === 1 ? '' : 's'} reorganizado${analysisProposal.changes.length === 1 ? '' : 's'}. Valores, datas, carteiras e IDs foram preservados.`)
+    setAnalysisStatus(`${analysisProposal.changes.length} alteração${analysisProposal.changes.length === 1 ? '' : 'ões'} aplicada${analysisProposal.changes.length === 1 ? '' : 's'} aos movimentos.`)
     setAnalysisError('')
     setAnalysisProposal(null)
+    setAnalysisBackupConfirmed(false)
   }
 
   const importBackupContent = async (content: string) => {
@@ -2087,6 +2098,10 @@ function App() {
       </section>
         </div>
       </details>
+      <details className="settings-group">
+        <summary><span><strong>Relatório financeiro</strong><small>Revisar e corrigir seus movimentos</small></span><ChevronRight size={17} aria-hidden="true" /></summary>
+        <div className="settings-group-content">{renderFinancialAnalysis()}</div>
+      </details>
       {preferencesError && <p className="preferences-error" role="alert">{preferencesError}</p>}
       {extrasError && <p className="preferences-error" role="alert">{extrasError}</p>}
     </div>
@@ -2096,20 +2111,25 @@ function App() {
     <div className="analysis-layout">
       <section className="panel preferences-card">
         <div className="preferences-card-heading">
-          <span className="eyebrow">FLUXO COM IA</span>
-          <h2>Exportar, revisar e organizar</h2>
-          <p>Exporte os dados, peça à IA para sugerir categorias e descrições mais claras e importe o JSON revisado para conferir as mudanças antes de aplicar.</p>
+          <span className="eyebrow">REVISÃO FINANCEIRA</span>
+          <h2>Revisar e corrigir movimentos</h2>
+          <p>Exporte os dados para conferência e importe um relatório revisado para corrigir valores, datas, carteiras, tipos, categorias e descrições. Inclusões e exclusões também aparecem para aprovação.</p>
         </div>
+        <p className="backup-warning">Antes de importar ou aplicar correções, exporte e guarde um backup atualizado no grupo acima. As alterações só são salvas depois da sua confirmação.</p>
+        <label className="analysis-backup-confirmation">
+          <input type="checkbox" checked={analysisBackupConfirmed} onChange={(event) => setAnalysisBackupConfirmed(event.target.checked)} />
+          <span>Já exportei e guardei um backup atualizado deste aparelho.</span>
+        </label>
         <div className="backup-actions analysis-actions">
           <button className="primary-button" type="button" onClick={() => void exportFinancialAnalysis()} disabled={isProcessingBackup}>
             <Download size={16} /> {isProcessingBackup ? 'Aguarde…' : 'Exportar relatório para IA'}
           </button>
-          <button className="secondary-button" type="button" onClick={() => analysisInputRef.current?.click()} disabled={isReadingAnalysisProposal}>
+          <button className="secondary-button" type="button" onClick={() => analysisInputRef.current?.click()} disabled={!analysisBackupConfirmed || isReadingAnalysisProposal}>
             <Upload size={16} /> {isReadingAnalysisProposal ? 'Lendo proposta…' : 'Importar relatório revisado'}
           </button>
-          <input ref={analysisInputRef} className="backup-file-input" type="file" accept=".json,application/json" onChange={(event) => void handleFinancialAnalysisFile(event)} />
+          <input ref={analysisInputRef} className="backup-file-input" type="file" accept=".json,application/json" onChange={(event) => void handleFinancialAnalysisFile(event)} disabled={!analysisBackupConfirmed} />
         </div>
-        <p className="backup-warning">A IA pode alterar nome, tipo, categoria e observação. O app rejeita alterações de valor, data, carteira, IDs e novas transações. As mudanças só são salvas após sua confirmação.</p>
+        <p className="backup-warning">IDs, origem do extrato e data de criação de movimentos existentes permanecem protegidos. Confira cada alteração, especialmente inclusões e exclusões, antes de aplicar.</p>
         <p className="backup-warning">O arquivo contém descrições e observações financeiras. Revise dados pessoais antes de enviá-lo a qualquer serviço de IA.</p>
         {analysisError && <p className="preferences-error" role="alert">{analysisError}</p>}
         {analysisStatus && <p className="backup-status" role="status">{analysisStatus}</p>}
@@ -2119,21 +2139,21 @@ function App() {
           <div className="preferences-card-heading">
             <span className="eyebrow">REVISÃO NECESSÁRIA</span>
             <h2 id="analysis-review-title">{analysisProposal.changes.length} alteração{analysisProposal.changes.length === 1 ? '' : 'ões'} proposta{analysisProposal.changes.length === 1 ? '' : 's'}</h2>
-            <p>Confira cada sugestão. Nenhuma mudança foi salva ainda. Valores, datas, carteiras e IDs permanecem iguais.</p>
+            <p>Confira os dados antes e depois. Nenhuma mudança foi salva ainda; inclusões e exclusões também serão aplicadas.</p>
           </div>
           <div className="analysis-change-list">
             {analysisProposal.changes.map((change) => (
               <article className="analysis-change-row" key={change.id}>
-                <strong>{change.after.name}</strong>
-                <small>{change.before.kind} · {change.before.category} → {change.after.kind} · {change.after.category}</small>
-                {change.before.name !== change.after.name && <small>Antes: {change.before.name}</small>}
+                <strong>{change.action === 'added' ? 'Novo movimento' : change.action === 'removed' ? 'Remover movimento' : 'Corrigir movimento'}: {change.after?.name ?? change.before?.name ?? change.id}</strong>
+                {change.before && <small>Antes: {currency(change.before.amount)} · {change.before.date} · {change.before.kind} · {change.before.category} · carteira {change.before.walletId ?? 'não definida'} · {change.before.notes || 'sem observação'}</small>}
+                {change.after && <small>Depois: {currency(change.after.amount)} · {change.after.date} · {change.after.kind} · {change.after.category} · carteira {change.after.walletId ?? 'não definida'} · {change.after.notes || 'sem observação'}</small>}
               </article>
             ))}
           </div>
           <p className="backup-warning">Novas categorias de gasto a adicionar: {analysisProposal.newExpenseCategories.length ? analysisProposal.newExpenseCategories.join(', ') : 'nenhuma'}.</p>
           <div className="analysis-review-actions">
             <button className="secondary-button" type="button" onClick={() => setAnalysisProposal(null)}>Cancelar</button>
-            <button className="primary-button" type="button" onClick={applyFinancialAnalysisProposal}><Check size={16} /> Aplicar alterações</button>
+            <button className="primary-button" type="button" onClick={applyFinancialAnalysisProposal} disabled={!analysisBackupConfirmed}><Check size={16} /> Aplicar alterações</button>
           </div>
         </section>
       )}
@@ -2219,12 +2239,10 @@ function App() {
 
         <div className="page-content">
           <div className="page-heading">
-            <div><span className="eyebrow">{activeSection === 'mais' ? 'DEIXE DO SEU JEITO' : activeSection === 'analise' ? 'ORGANIZAÇÃO ASSISTIDA' : activeSection === 'movimentos' ? 'CONTROLE DO DIA A DIA' : activeSection === 'historico' ? 'VISÃO AO LONGO DO TEMPO' : activeSection === 'dividas' ? 'CONTAS E COMPROMISSOS' : activeSection === 'contas' ? 'ORGANIZAÇÃO FINANCEIRA' : activeSection === 'calendario' ? 'AGENDA FINANCEIRA' : todayLabel}</span><h1>{sectionTitles[activeSection]}</h1><p>{activeSection === 'mais' ? 'Ajuste o visual e a leitura do seu aplicativo.' : activeSection === 'analise' ? 'Exporte os dados, revise sugestões de IA e aplique apenas o que você aprovar.' : activeSection === 'movimentos' ? 'Anote gastos rápidos e todo dinheiro que entrar.' : activeSection === 'historico' ? 'Acompanhe tudo que aconteceu com seu dinheiro ao longo do tempo.' : activeSection === 'dividas' ? 'Acompanhe vencimentos, pagamentos e contas recorrentes.' : activeSection === 'contas' ? 'Veja seus compromissos financeiros em um só lugar.' : activeSection === 'calendario' ? 'Consulte contas, gastos e recebimentos por data.' : 'Um resumo claro para você cuidar bem do seu dinheiro.'}</p></div>
-            {activeSection !== 'mais' && activeSection !== 'analise' && activeSection !== 'contas' && activeSection !== 'historico' && activeSection !== 'calendario' && <button className="primary-button" onClick={() => activeSection === 'dividas' ? openNewDebtForm() : openNewMovementForm('expense')}><Plus size={18} /> {activeSection === 'dividas' ? 'Nova dívida' : activeSection === 'movimentos' ? 'Novo gasto' : 'Novo lançamento'}</button>}
+            <div><span className="eyebrow">{activeSection === 'mais' ? 'DEIXE DO SEU JEITO' : activeSection === 'movimentos' ? 'CONTROLE DO DIA A DIA' : activeSection === 'historico' ? 'VISÃO AO LONGO DO TEMPO' : activeSection === 'dividas' ? 'CONTAS E COMPROMISSOS' : activeSection === 'contas' ? 'ORGANIZAÇÃO FINANCEIRA' : activeSection === 'calendario' ? 'AGENDA FINANCEIRA' : todayLabel}</span><h1>{sectionTitles[activeSection]}</h1><p>{activeSection === 'mais' ? 'Ajuste o visual e a leitura do seu aplicativo.' : activeSection === 'movimentos' ? 'Anote gastos rápidos e todo dinheiro que entrar.' : activeSection === 'historico' ? 'Acompanhe tudo que aconteceu com seu dinheiro ao longo do tempo.' : activeSection === 'dividas' ? 'Acompanhe vencimentos, pagamentos e contas recorrentes.' : activeSection === 'contas' ? 'Veja seus compromissos financeiros em um só lugar.' : activeSection === 'calendario' ? 'Consulte contas, gastos e recebimentos por data.' : 'Um resumo claro para você cuidar bem do seu dinheiro.'}</p></div>
+            {activeSection !== 'mais' && activeSection !== 'contas' && activeSection !== 'historico' && activeSection !== 'calendario' && <button className="primary-button" onClick={() => activeSection === 'dividas' ? openNewDebtForm() : openNewMovementForm('expense')}><Plus size={18} /> {activeSection === 'dividas' ? 'Nova dívida' : activeSection === 'movimentos' ? 'Novo gasto' : 'Novo lançamento'}</button>}
           </div>
-          {activeSection === 'analise' ? (
-            renderFinancialAnalysis()
-          ) : activeSection === 'mais' ? (
+          {activeSection === 'mais' ? (
             renderPreferences()
           ) : activeSection === 'calendario' ? (
             renderCalendar()

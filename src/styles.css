@@ -890,6 +890,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .analysis-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .analysis-actions .primary-button, .analysis-actions .secondary-button { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 13px; font-size: 11px; }
 .analysis-actions .secondary-button { color: var(--app-ink); background: var(--app-surface); border-color: var(--app-line); }
+.analysis-backup-confirmation { min-width: 0; display: flex; align-items: flex-start; gap: 9px; margin: 12px 0; color: var(--app-ink); font-size: 11px; line-height: 1.45; cursor: pointer; }
+.analysis-backup-confirmation input { flex: 0 0 16px; width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--accent-color); }
 .analysis-review { min-width: 0; }
 .analysis-change-list { max-height: 420px; display: grid; overflow: auto; border-top: 1px solid var(--app-line); }
 .analysis-change-row { min-width: 0; display: grid; gap: 4px; padding: 11px 2px; border-bottom: 1px solid var(--app-line); overflow-wrap: anywhere; }
@@ -900,6 +902,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 700px) {
   .mobile-nav-item { min-width: 0; font-size: 6px; }
   .analysis-layout { gap: 10px; }
+  .analysis-backup-confirmation { font-size: 11px; }
   .analysis-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
   .analysis-actions .primary-button, .analysis-actions .secondary-button { width: 100%; min-width: 0; min-height: 44px; height: auto; padding: 9px 12px; font-size: 11px; white-space: normal; }
   .analysis-review-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
