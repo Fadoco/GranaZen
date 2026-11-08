@@ -274,43 +274,57 @@ const profileInitials = (name: string) => {
   return words.length > 1 ? `${words[0][0]}${words[words.length - 1][0]}`.toUpperCase() : (words[0]?.[0] ?? 'F').toUpperCase()
 }
 
-const resizeProfilePhoto = (file: File): Promise<string> => new Promise((resolve, reject) => {
-  if (!file.type.startsWith('image/')) {
-    reject(new Error('Escolha um arquivo de imagem para a foto do perfil.'))
-    return
-  }
-  if (file.size > 10 * 1024 * 1024) {
-    reject(new Error('A foto deve ter no máximo 10 MB.'))
-    return
+const decodeProfileImage = async (file: File): Promise<ImageBitmap | HTMLImageElement> => {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file, { imageOrientation: 'from-image' })
+    } catch {
+    }
   }
 
-  const url = URL.createObjectURL(file)
-  const image = new Image()
-  image.onload = () => {
-    URL.revokeObjectURL(url)
-    const scale = Math.min(1, 512 / Math.max(image.naturalWidth, image.naturalHeight))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
-    const context = canvas.getContext('2d')
-    if (!context) {
-      reject(new Error('Não foi possível preparar a foto selecionada.'))
-      return
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(image)
     }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('Não foi possível abrir a imagem selecionada.'))
+    }
+    image.src = url
+  })
+}
+
+const resizeProfilePhoto = async (file: File): Promise<string> => {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Escolha um arquivo de imagem para a foto do perfil.')
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error('A foto deve ter no máximo 10 MB.')
+  }
+
+  const image = await decodeProfileImage(file)
+  const imageWidth = 'naturalWidth' in image ? image.naturalWidth : image.width
+  const imageHeight = 'naturalHeight' in image ? image.naturalHeight : image.height
+  try {
+    const scale = Math.min(1, 512 / Math.max(imageWidth, imageHeight))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(imageWidth * scale))
+    canvas.height = Math.max(1, Math.round(imageHeight * scale))
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Não foi possível preparar a foto selecionada.')
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
     const photo = canvas.toDataURL('image/jpeg', 0.82)
     if (photo.length > 1024 * 1024) {
-      reject(new Error('Não foi possível reduzir a foto para o tamanho permitido. Escolha outra imagem.'))
-      return
+      throw new Error('Não foi possível reduzir a foto para o tamanho permitido. Escolha outra imagem.')
     }
-    resolve(photo)
+    return photo
+  } finally {
+    if ('close' in image) image.close()
   }
-  image.onerror = () => {
-    URL.revokeObjectURL(url)
-    reject(new Error('Não foi possível abrir a imagem selecionada.'))
-  }
-  image.src = url
-})
+}
 
 const isDebtCategory = (value: unknown): value is DebtCategory =>
   typeof value === 'string' && Boolean(value.trim()) && value.length <= 40
@@ -2333,10 +2347,12 @@ function App() {
         {isAndroidApp() && androidUpdate && isUpdatePromptOpen && (
           <div className="update-prompt-backdrop" role="presentation">
             <section className="update-prompt" role="alertdialog" aria-modal="true" aria-labelledby="update-prompt-title" aria-describedby="update-prompt-description">
-              <div className="update-prompt-icon"><Download size={26} /></div>
-              <span className="eyebrow">ATUALIZAÇÃO DISPONÍVEL</span>
-              <h2 id="update-prompt-title">Nova versão do GranaZen</h2>
-              <p id="update-prompt-description">A versão <strong>{androidUpdate.version}</strong> está disponível para baixar e instalar.</p>
+              <div className="update-prompt-top">
+                <span className="update-prompt-icon"><Download size={21} /></span>
+                <span className="update-prompt-badge">NOVA VERSÃO</span>
+              </div>
+              <h2 id="update-prompt-title">Atualização disponível</h2>
+              <p id="update-prompt-description">O GranaZen <strong>{androidUpdate.version}</strong> está pronto para instalar.</p>
               {androidUpdate.notes && <details className="update-prompt-notes"><summary>O que mudou nesta versão</summary><p>{androidUpdate.notes}</p></details>}
               {androidUpdateStatus && <p className="update-prompt-status" role="status">{androidUpdateStatus}</p>}
               {androidUpdateError && <p className="update-prompt-error" role="alert">{androidUpdateError}</p>}
