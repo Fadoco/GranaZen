@@ -12,6 +12,22 @@ export type StatementEntry = {
 const normalizeHeader = (value: string) =>
   value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR')
 
+const statementEntryKey = (entry: Pick<StatementEntry, 'date' | 'name' | 'amount'>) =>
+  `${entry.date}|${entry.amount.toFixed(2)}|${normalizeHeader(entry.name).replace(/[^\p{L}\p{N}]+/gu, ' ').trim()}`
+
+export const selectNonDuplicateStatementEntries = (
+  entries: Pick<StatementEntry, 'date' | 'name' | 'amount'>[],
+  existingEntries: Pick<StatementEntry, 'date' | 'name' | 'amount'>[],
+) => {
+  const knownEntries = new Set(existingEntries.map(statementEntryKey))
+  return entries.map((entry) => {
+    const key = statementEntryKey(entry)
+    if (knownEntries.has(key)) return false
+    knownEntries.add(key)
+    return true
+  })
+}
+
 const parseCsvRows = (content: string): string[][] => {
   const rows: string[][] = []
   const firstLine = content.split(/\r?\n/, 1)[0] ?? ''
@@ -129,6 +145,70 @@ const parseOfx = (content: string): StatementEntry[] => {
       notes: 'Importado de extrato',
     }
   })
+}
+
+const parsePdfDate = (value: string) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  const [day, month, year] = value.split(/[./-]/)
+  return `${year}-${month}-${day}`
+}
+
+const parsePdfAmount = (value: string) => {
+  const negative = /[-−]|\(/.test(value)
+  const cleaned = value.replace(/[R$\s()−-]/g, '')
+  const normalized = cleaned.includes(',')
+    ? cleaned.replace(/\./g, '').replace(',', '.')
+    : cleaned
+  const amount = Number(normalized)
+  return Number.isFinite(amount) ? (negative ? -amount : amount) : null
+}
+
+export const parsePdfStatementText = (content: string): StatementEntry[] => {
+  const datePattern = /(?<!\d)(\d{4}-\d{2}-\d{2}|\d{2}[./-]\d{2}[./-]\d{4})(?!\d)/
+  const amountPattern = /(?:R\$\s*)?[-−]?\s*(?:\(\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2}|\.\d{2})\s*\)?/g
+  const incomePattern = /\b(credito|credit|recebid[oa]|recebimento|deposito|rendimento|estorno|entrada|cashback)\b/i
+  const entries: StatementEntry[] = []
+
+  for (const line of content.split(/\r?\n/)) {
+    const dateMatch = datePattern.exec(line)
+    datePattern.lastIndex = 0
+    if (!dateMatch) continue
+    const date = parsePdfDate(dateMatch[1])
+    if (!isValidDateValue(date)) continue
+
+    const amounts = [...line.matchAll(amountPattern)]
+      .map((match) => ({ value: parsePdfAmount(match[0]), text: match[0] }))
+      .filter((amount): amount is { value: number; text: string } => amount.value !== null && amount.value !== 0)
+    if (!amounts.length) continue
+
+    const normalizedLine = normalizeHeader(line)
+    const selected = /\bsaldo\b/i.test(normalizedLine) && amounts.length > 1
+      ? amounts[amounts.length - 2]
+      : amounts.find((amount) => /[-−(]/.test(amount.text)) ?? amounts[0]
+    const description = line
+      .replace(dateMatch[0], ' ')
+      .replace(selected.text, ' ')
+      .replace(amountPattern, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!description || /^(data|historico|descri[cç][aã]o|lan[cç]amento)$/i.test(description)) continue
+
+    const isIncome = selected.value > 0 && (/[+]/.test(selected.text) || incomePattern.test(normalizedLine))
+    entries.push({
+      date,
+      name: description.slice(0, 100),
+      amount: Math.abs(selected.value),
+      kind: isIncome ? 'extra' : 'expense',
+      category: isIncome ? 'Renda extra' : 'Outros',
+      notes: 'Importado de extrato PDF',
+    })
+  }
+
+  if (!entries.length) {
+    throw new Error('Não foram encontrados lançamentos de texto neste PDF. Confira se ele permite selecionar/copiar texto; PDFs digitalizados como imagem não são compatíveis.')
+  }
+  if (entries.length > 1000) throw new Error('O arquivo tem mais de 1.000 lançamentos. Divida o extrato em arquivos menores.')
+  return entries
 }
 
 export const parseStatementFile = (fileName: string, content: string): StatementEntry[] => {

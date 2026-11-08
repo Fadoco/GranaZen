@@ -44,7 +44,7 @@ As estimativas e saldos são calculados a partir dos dados informados no GranaZe
 
 ### Importar e proteger os dados
 
-- Importar extratos **CSV** ou **OFX**: o app mostra uma prévia para revisão e tenta desmarcar duplicados antes de importar.
+- Importar extratos **CSV**, **OFX** ou **PDF com texto selecionável**: o app mostra uma prévia e ignora lançamentos já importados, inclusive ao selecionar o mesmo arquivo novamente. PDFs escaneados como imagem não têm extração OCR.
 - Exportar e restaurar um backup JSON com perfil, preferências, carteiras, categorias, metas, orçamentos, contas e movimentações.
 - Usar o aplicativo offline depois que a versão web tiver sido carregada e armazenada no dispositivo.
 - Ocultar valores, escolher tema e cor, aumentar o tamanho de leitura e usar a navegação por teclado.

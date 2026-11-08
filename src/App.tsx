@@ -56,7 +56,7 @@ import {
 } from './androidUpdate'
 import { pickBackupFile, saveBackupFile } from './backupFiles'
 import { isValidDateValue, matchesSearch, nextRecurringDueDate } from './financeUtils'
-import { parseStatementFile, type StatementEntry } from './statementImport'
+import { parseStatementFile, selectNonDuplicateStatementEntries, type StatementEntry } from './statementImport'
 import type { Debt } from './financeTypes'
 import {
   getNativeReminderPermission,
@@ -149,8 +149,6 @@ const incomeCategories: { label: string; icon: typeof Banknote }[] = [
 
 const currency = (value: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value)
-const normalizeImportName = (value: string) =>
-  value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR')
 const navigation: { id: Section; label: string; icon: typeof House }[] = [
   { id: 'inicio', label: 'Início', icon: House },
   { id: 'movimentos', label: 'Movimentos', icon: ArrowLeftRight },
@@ -844,17 +842,21 @@ function App() {
     setStatementError('')
     setStatementStatus('')
     try {
-      const entries = parseStatementFile(file.name, await file.text())
+      if (file.size > 10 * 1024 * 1024) throw new Error('O extrato excede o limite de 10 MB.')
+      let entries: StatementEntry[]
+      if (file.name.toLocaleLowerCase('pt-BR').endsWith('.pdf')) {
+        const { parsePdfStatementFile } = await import('./pdfStatementImport')
+        entries = await parsePdfStatementFile(await file.arrayBuffer())
+      } else {
+        entries = parseStatementFile(file.name, await file.text())
+      }
       if (entries.length > 1000) throw new Error('O arquivo tem mais de 1.000 lançamentos. Divida o extrato em arquivos menores.')
-      const existing = new Set(movements.map((item) => `${item.date}|${item.amount.toFixed(2)}|${normalizeImportName(item.name)}`))
-      const selection = entries.map((entry) => {
-        const key = `${entry.date}|${entry.amount.toFixed(2)}|${normalizeImportName(entry.name)}`
-        if (existing.has(key)) return false
-        existing.add(key)
-        return true
-      })
+      const selection = selectNonDuplicateStatementEntries(entries, movements)
       setStatementPreview(entries)
       setStatementSelection(selection)
+      if (!selection.some(Boolean)) {
+        setStatementStatus('Todos os lançamentos deste arquivo já foram importados. Nenhum será adicionado novamente.')
+      }
     } catch (error) {
       console.error('Não foi possível ler o extrato financeiro.', error)
       setStatementError(error instanceof Error ? error.message : 'Não foi possível ler este extrato.')
@@ -869,8 +871,17 @@ function App() {
       setStatementError('Selecione pelo menos um lançamento para importar.')
       return
     }
+    const selection = selectNonDuplicateStatementEntries(selected, movements)
+    const uniqueSelected = selected.filter((_, index) => selection[index])
+    if (!uniqueSelected.length) {
+      setStatementStatus('Nenhum lançamento novo foi importado. Os itens já constam em Movimentos.')
+      setStatementPreview([])
+      setStatementSelection([])
+      setStatementError('')
+      return
+    }
     const walletId = extras.wallets[0]?.id ?? null
-    const additions: Movement[] = selected.map((entry) => ({
+    const additions: Movement[] = uniqueSelected.map((entry) => ({
       ...entry,
       id: crypto.randomUUID(),
       walletId,
@@ -880,7 +891,8 @@ function App() {
     setStatementPreview([])
     setStatementSelection([])
     setStatementError('')
-    setStatementStatus(`${additions.length} lançamento${additions.length === 1 ? '' : 's'} importado${additions.length === 1 ? '' : 's'}. Confira os dados em Movimentos.`)
+    const skipped = selected.length - additions.length
+    setStatementStatus(`${additions.length} lançamento${additions.length === 1 ? '' : 's'} importado${additions.length === 1 ? '' : 's'}${skipped ? ` · ${skipped} duplicado${skipped === 1 ? '' : 's'} ignorado${skipped === 1 ? '' : 's'}` : ''}. Confira os dados em Movimentos.`)
   }
 
   const toggleDashboardCard = (card: string) => {
@@ -1765,6 +1777,9 @@ function App() {
 
   const renderPreferences = () => (
     <div className="preferences-layout">
+      <details className="settings-group">
+        <summary><span><strong>Perfil e aparência</strong><small>Dados pessoais, tema, cores e acessibilidade</small></span><ChevronRight size={17} aria-hidden="true" /></summary>
+        <div className="settings-group-content">
       <section className="panel preferences-card profile-card">
         <div className="preferences-card-heading">
           <span className="eyebrow">SEU PERFIL</span>
@@ -1847,6 +1862,11 @@ function App() {
           <input type="checkbox" checked={preferences.hideAmounts} onChange={(event) => updatePreferences({ hideAmounts: event.target.checked })} />
         </label>
       </section>
+        </div>
+      </details>
+      <details className="settings-group">
+        <summary><span><strong>Organização financeira</strong><small>Carteiras e categorias de gastos</small></span><ChevronRight size={17} aria-hidden="true" /></summary>
+        <div className="settings-group-content">
       <section className="panel preferences-card">
         <div className="preferences-card-heading"><span className="eyebrow">ORGANIZAÇÃO</span><h2>Carteiras e contas</h2><p>Separe saldos por conta bancária, poupança, dinheiro ou cartão. Os lançamentos vinculados atualizam o saldo exibido.</p></div>
         <form className="inline-finance-form" onSubmit={addWallet}>
@@ -1862,6 +1882,11 @@ function App() {
         <form className="inline-finance-form" onSubmit={addCustomExpenseCategory}><label>Nova categoria<input maxLength={40} placeholder="Ex.: Pets" value={categoryDraft} onChange={(event) => setCategoryDraft(event.target.value)} /></label><button className="primary-button" type="submit"><Plus size={16} /> Adicionar</button></form>
         <div className="category-chip-list">{extras.customExpenseCategories.map((category) => <span className="category-chip" key={category}>{category}<button type="button" aria-label={`Remover categoria ${category}`} onClick={() => setExtras((current) => ({ ...current, customExpenseCategories: current.customExpenseCategories.filter((item) => item !== category) }))}><X size={13} /></button></span>)}</div>
       </section>
+        </div>
+      </details>
+      <details className="settings-group">
+        <summary><span><strong>Planejamento</strong><small>Orçamentos, metas e resumo inicial</small></span><ChevronRight size={17} aria-hidden="true" /></summary>
+        <div className="settings-group-content">
       <section className="panel preferences-card">
         <div className="preferences-card-heading"><span className="eyebrow">PLANEJAMENTO MENSAL</span><h2>Orçamentos por categoria</h2><p>Defina limites para {monthLabel}. Os gastos registrados são comparados ao limite e sinalizam quando estão próximos ou acima.</p></div>
         <form className="inline-finance-form" onSubmit={addBudget}>
@@ -1890,14 +1915,24 @@ function App() {
           ['budgets', 'Orçamentos'], ['goals', 'Metas'], ['activity', 'Atividade recente'],
         ].map(([id, label]) => <label key={id}><input type="checkbox" checked={extras.dashboardCards.includes(id)} onChange={() => toggleDashboardCard(id)} />{label}</label>)}</div>
       </section>
+        </div>
+      </details>
+      <details className="settings-group">
+        <summary><span><strong>Importar extratos</strong><small>CSV, OFX ou PDF com texto selecionável</small></span><ChevronRight size={17} aria-hidden="true" /></summary>
+        <div className="settings-group-content">
       <section className="panel preferences-card">
-        <div className="preferences-card-heading"><span className="eyebrow">EXTRATO BANCÁRIO</span><h2>Importar CSV ou OFX</h2><p>O arquivo é lido neste aparelho. Revise e selecione os lançamentos antes de adicioná-los; nenhuma credencial bancária é solicitada.</p></div>
+        <div className="preferences-card-heading"><span className="eyebrow">EXTRATO BANCÁRIO</span><h2>Importar CSV, OFX ou PDF</h2><p>O arquivo é lido neste aparelho. Revise e selecione os lançamentos antes de adicioná-los; PDFs digitalizados como imagem não permitem extração de texto.</p></div>
         <button className="secondary-button" type="button" onClick={() => statementInputRef.current?.click()} disabled={isReadingStatement}><FileUp size={16} /> {isReadingStatement ? 'Lendo arquivo…' : 'Selecionar extrato'}</button>
-        <input ref={statementInputRef} className="backup-file-input" type="file" accept=".csv,.txt,.ofx,text/csv" onChange={(event) => void handleStatementFile(event)} />
+        <input ref={statementInputRef} className="backup-file-input" type="file" accept=".csv,.txt,.ofx,.pdf,text/csv,application/pdf" onChange={(event) => void handleStatementFile(event)} />
         {statementError && <p className="preferences-error" role="alert">{statementError}</p>}
         {statementStatus && <p className="backup-status" role="status">{statementStatus}</p>}
-        {statementPreview.length > 0 && <div className="statement-review"><p>{statementSelection.filter(Boolean).length} de {statementPreview.length} itens selecionados. Itens possivelmente duplicados vêm desmarcados.</p><div className="finance-settings-list">{statementPreview.map((entry, index) => <label className="statement-row" key={`${entry.date}-${entry.name}-${index}`}><input type="checkbox" checked={statementSelection[index]} onChange={(event) => setStatementSelection((current) => current.map((selected, itemIndex) => itemIndex === index ? event.target.checked : selected))} /><span><strong>{entry.name}</strong><small>{formatMovementDate(entry.date)} · {entry.category}</small></span><strong>{entry.kind === 'expense' ? '−' : '+'}{displayCurrency(entry.amount)}</strong></label>)}</div><div className="profile-form-actions"><button type="button" className="primary-button" onClick={importSelectedStatementEntries}><Check size={16} /> Importar selecionados</button></div></div>}
+        {statementPreview.length > 0 && <div className="statement-review"><p>{statementSelection.filter(Boolean).length} de {statementPreview.length} itens selecionados. Itens possivelmente duplicados vêm desmarcados.</p><div className="finance-settings-list">{statementPreview.map((entry, index) => <label className="statement-row" key={`${entry.date}-${entry.name}-${index}`}><input type="checkbox" checked={statementSelection[index]} onChange={(event) => setStatementSelection((current) => current.map((selected, itemIndex) => itemIndex === index ? event.target.checked : selected))} /><span><strong>{entry.name}</strong><small>{formatMovementDate(entry.date)} · {entry.category}</small></span><strong>{entry.kind === 'expense' ? '−' : '+'}{displayCurrency(entry.amount)}</strong></label>)}</div><div className="profile-form-actions"><button type="button" className="primary-button" onClick={importSelectedStatementEntries} disabled={!statementSelection.some(Boolean)}><Check size={16} /> Importar selecionados</button></div></div>}
       </section>
+        </div>
+      </details>
+      <details className="settings-group">
+        <summary><span><strong>Lembretes e aplicativo</strong><small>Notificações e atualizações no Android</small></span><ChevronRight size={17} aria-hidden="true" /></summary>
+        <div className="settings-group-content">
       {isAndroidApp() && (
         <section className="panel preferences-card app-update-settings" aria-live="polite">
           <div className="preferences-card-heading">
@@ -1934,6 +1969,11 @@ function App() {
         <div className="preferences-card-heading"><span className="eyebrow">LEMBRETES</span><h2>{supportsNativeReminders() ? 'Notificações no Android' : 'Notificações do navegador'}</h2><p>{supportsNativeReminders() ? 'Receba um aviso um dia antes do vencimento, mesmo com o app fechado. O Android pode ajustar o horário de entrega conforme as configurações de bateria e alarmes.' : 'Quando o navegador oferecer suporte, o GranaZen pode avisar ao abrir o app sobre contas vencidas ou próximas do vencimento. Isso não agenda alarmes quando o app está fechado.'}</p></div>
         {notificationPermission === 'unsupported' ? <p className="backup-warning">Notificações do sistema não são compatíveis neste ambiente.</p> : notificationPermission === 'granted' ? <p className="backup-status">Permissão concedida. {supportsNativeReminders() ? 'Os avisos de vencimento estão programados para contas próximas.' : 'Os lembretes aparecem quando você abre o app; alarmes quando ele está fechado não são suportados.'}</p> : <button className="secondary-button" type="button" onClick={() => void requestReminderNotifications()} disabled={notificationPermission === 'denied'}><Bell size={16} /> {notificationPermission === 'denied' ? 'Permissão bloqueada nas configurações do aparelho' : 'Permitir notificações neste aparelho'}</button>}
       </section>
+        </div>
+      </details>
+      <details className="settings-group">
+        <summary><span><strong>Backup e seus dados</strong><small>Exportação e restauração entre aparelhos</small></span><ChevronRight size={17} aria-hidden="true" /></summary>
+        <div className="settings-group-content">
       <section className="panel preferences-card backup-card">
         <div className="preferences-card-heading">
           <span className="eyebrow">SEUS DADOS</span>
@@ -1953,6 +1993,8 @@ function App() {
         {backupError && <p className="preferences-error" role="alert">{backupError}</p>}
         {backupStatus && <p className="backup-status" role="status">{backupStatus}</p>}
       </section>
+        </div>
+      </details>
       {preferencesError && <p className="preferences-error" role="alert">{preferencesError}</p>}
       {extrasError && <p className="preferences-error" role="alert">{extrasError}</p>}
     </div>

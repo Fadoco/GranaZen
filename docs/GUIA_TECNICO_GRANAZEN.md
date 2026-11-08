@@ -134,18 +134,19 @@ installmentsPaid?, interestRateMonthly?, priority?, remainingBalance?, createdAt
 - Orçamentos: um limite por categoria e mês (`YYYY-MM`). Gasto considera movimentos `expense` daquela categoria no mês; aviso visual a partir de 80%, e limite atingido/ultrapassado a partir de 100%. Ao definir outra vez o mesmo par categoria/mês, substitui o limite existente.
 - Metas: nome, valor-alvo, valor guardado e prazo opcional. O usuário atualiza manualmente o valor guardado; barra mostra percentual limitado visualmente a 100%. Até 100 metas no validador de backup.
 
-### 4.7 Importação de extratos CSV/OFX
+### 4.7 Importação de extratos CSV/OFX/PDF
 
-Implementação em `src/statementImport.ts`; seleção, revisão e inclusão em `src/App.tsx`.
+Implementação CSV/OFX e normalização de linhas PDF em `src/statementImport.ts`; extração da camada textual PDF em `src/pdfStatementImport.ts`; seleção, revisão e inclusão em `src/App.tsx`.
 
-- Arquivos suportados: `.csv`, `.txt` (conteúdo CSV) e `.ofx`; conteúdo limitado a 10 MB e 1.000 lançamentos por importação.
+- Arquivos suportados: `.csv`, `.txt` (conteúdo CSV), `.ofx` e `.pdf`; arquivos limitados a 10 MB e 1.000 lançamentos por importação. PDFs também têm limite de 250 páginas.
 - CSV: autodetecta entre `;`, `,` e tab pelo cabeçalho; parser lida com campos entre aspas, delimitador dentro de aspas e aspas escapadas por duplicação.
 - Cabeçalhos normalizados ignoram acentos e caixa. Data aceita `data`, `date` ou `dtposted`; descrição aceita `descricao`, `description`, `historico`, `memo`, `name`, `nome`; valor aceita `valor`, `amount`, `value`, `trnamt`; tipo opcional aceita `tipo` ou `type`.
 - Datas do CSV precisam estar no formato ISO `YYYY-MM-DD` e ser datas reais; não se presume conversão automática de `DD/MM/YYYY`.
 - Valores brasileiros como `2.500,00`, símbolo R$ e espaços são aceitos; valor zero/inválido é rejeitado. Sem cabeçalho Tipo, valor positivo vira receita e negativo vira gasto. Com Tipo, palavras como crédito/receita/income/deposito indicam entrada.
 - OFX: lê os blocos `<STMTTRN>`, data em `DTPOSTED`, valor em `TRNAMT`, nome em `NAME` ou fallback `MEMO`. Valor positivo é entrada e negativo é gasto.
+- PDF: PDF.js extrai texto localmente no aparelho e ordena fragmentos por página/posição. O parser procura linhas com data ISO ou `DD/MM/AAAA` e valores monetários; usa sinal e termos como “recebido”, “crédito” e “depósito” para classificar entradas. Como os bancos variam a ordem e as colunas, a prévia deve ser revisada. PDFs compostos apenas por imagens não são compatíveis; OCR não está incluído.
 - Descrição é limitada a 100 caracteres. Categorias de importação são “Outros” e “Renda extra”; observação é “Importado de extrato”.
-- Prévia exibe os itens e permite escolher quais importar. Duplicados com mesma data, valor absoluto e descrição normalizada são inicialmente desmarcados; duplicação de nome ignora acentos e caixa. Isso é uma heurística, não conciliação bancária.
+- Prévia exibe os itens e permite escolher quais importar. Duplicados com mesma data, valor em centavos e descrição normalizada são inicialmente desmarcados; a normalização ignora acentos, caixa, pontuação e espaços repetidos. A mesma checagem é repetida ao confirmar a gravação, mesmo que o usuário marque manualmente um duplicado. Isso é uma heurística, não conciliação bancária.
 - Itens importados são associados à primeira carteira disponível. Nenhuma credencial bancária é solicitada nem arquivo enviado para serviço remoto.
 
 ### 4.8 Backup, exportação e restauração
@@ -241,7 +242,8 @@ O componente principal é `src/App.tsx`. Domínio, validações, estados de inte
 | `src/styles.css` | Identidade visual, layouts, responsividade, temas, acessibilidade e diálogos. |
 | `src/financeTypes.ts` | Tipo `Debt`, compartilhado com lembretes. Outros modelos funcionais estão definidos localmente no App. |
 | `src/financeUtils.ts` | Validação de datas ISO, busca sem acentos/caixa, avanço mensal de vencimento. |
-| `src/statementImport.ts` | Parser CSV/OFX e validação/conversão para lançamentos. |
+| `src/statementImport.ts` | Parser CSV/OFX, normalização de linhas PDF e validação/conversão para lançamentos. |
+| `src/pdfStatementImport.ts` | Extração local de texto e ordenação dos itens por página em PDFs. |
 | `src/backupFiles.ts` | Adaptador de seleção/salvamento por Capacitor no Android e Blob no browser. |
 | `src/localReminders.ts` | Permissão, ID de notificação, cancelamento e agendamento Android. |
 | `src/androidUpdate.ts` | Validação do manifesto, comparação de versão e chamada ao plugin nativo de update. |
@@ -347,7 +349,7 @@ O keystore é o segredo de longo prazo da identidade Android. Deve existir backu
 ## 11. Testes disponíveis
 
 - `scripts/finance-utils.test.mjs`: datas válidas/inválidas, leap day, busca sem acentos/caixa e progressão mensal em mês curto/virada de ano.
-- `scripts/statement-import.test.mjs`: CSV com delimitador/aspas/decimais, OFX, colunas/datas inválidas, extensão, aspas sem fechamento e limite de tamanho.
+- `scripts/statement-import.test.mjs`: CSV com delimitador/aspas/decimais, OFX, texto extraído de PDF, colunas/datas inválidas, extensão, aspas sem fechamento e limite de tamanho.
 - `scripts/check-android-release-version.test.mjs`: parser Gradle, aceitação e rejeição de versão não crescente.
 - `scripts/prepare-android-release.test.mjs`: primeira versão, incremento de patch/versionCode e validação de entrada.
 - Não há suíte automatizada de componentes UI ou testes end-to-end identificados. Mudanças em fluxos de UI devem ser validadas com build e verificação manual dirigida.
