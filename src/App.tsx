@@ -54,7 +54,7 @@ import {
   isAndroidApp,
   type AndroidUpdate,
 } from './androidUpdate'
-import { pickBackupFile, saveBackupFile } from './backupFiles'
+import { pickBackupFile, saveBackupFile, saveFinancialReportFile } from './backupFiles'
 import { isValidDateValue, matchesSearch, nextRecurringDueDate } from './financeUtils'
 import { createFinancialAnalysisReport } from './financialReport'
 import { parseStatementFile, selectNonDuplicateStatementEntries, type StatementEntry } from './statementImport'
@@ -1002,10 +1002,7 @@ function App() {
         customExpenseCategories: extras.customExpenseCategories,
       })
       const content = JSON.stringify(report, null, 2)
-      if (new TextEncoder().encode(content).byteLength > 20 * 1024 * 1024) {
-        throw new Error('O relatório excede o limite de 20 MB do seletor de arquivos Android.')
-      }
-      const saved = await saveBackupFile(content, `granazen-relatorio-financeiro-${localDateValue()}.json`)
+      const saved = await saveFinancialReportFile(content, `granazen-relatorio-financeiro-${localDateValue()}.json`)
       setAnalysisStatus(saved
         ? 'Relatório financeiro salvo. Confira as descrições e observações antes de compartilhá-lo.'
         : 'Salvamento do relatório cancelado.')
@@ -2034,7 +2031,7 @@ function App() {
           <button className="secondary-button" type="button" onClick={() => void selectBackupFile()} disabled={isProcessingBackup}>
             <Upload size={16} /> Importar backup
           </button>
-          <button className="secondary-button" type="button" onClick={() => void exportFinancialAnalysis()} disabled={isProcessingBackup}>
+          <button className="secondary-button analysis-report-button" type="button" onClick={() => void exportFinancialAnalysis()} disabled={isProcessingBackup}>
             <FileText size={16} /> {isProcessingBackup ? 'Aguarde…' : 'Exportar relatório para análise'}
           </button>
           <input ref={backupInputRef} className="backup-file-input" type="file" accept=".json,application/json" onChange={(event) => void handleBackupFileChange(event)} />

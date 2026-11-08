@@ -853,6 +853,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .calendar-controls .secondary-button { min-height: 32px; }
 }
 @media (max-width: 700px) {
+  .backup-card, .backup-card .preferences-card-heading, .backup-card .preferences-card-heading p { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  .backup-actions { grid-template-columns: minmax(0, 1fr); }
+  .backup-actions .primary-button, .backup-actions .secondary-button { width: 100%; min-width: 0; min-height: 44px; height: auto; padding: 9px 12px; overflow: visible; font-size: 11px; white-space: normal; }
+  .backup-actions .analysis-report-button { grid-column: 1 / -1; }
+}
+@media (max-width: 700px) {
   .mobile-nav { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .mobile-nav-item { font-size: 7px; }
 }
