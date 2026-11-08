@@ -57,7 +57,7 @@ export const prepareFinancialAnalysisProposal = (
   currentMovements: FinancialReportMovement[],
   existingExpenseCategories: string[],
   currentCustomCategories: string[],
-  currentWalletIds: string[] = [],
+  currentWalletIds?: string[],
 ): FinancialAnalysisProposal => {
   if (!isRecord(value) || value.app !== 'GranaZen' || value.reportType !== 'financial-analysis' ||
       value.formatVersion !== 1 || !Array.isArray(value.movements)) {
@@ -114,8 +114,8 @@ export const prepareFinancialAnalysisProposal = (
       throw new Error(`A data do movimento ${item.id} é inválida.`)
     }
     if (typeof notes !== 'string' || notes.length > 1000) throw new Error(`A observação do movimento ${item.id} é inválida.`)
-    if (walletId !== null && typeof walletId !== 'string') throw new Error(`A carteira do movimento ${item.id} é inválida.`)
-    if (walletId && currentWalletIds.length && !currentWalletIds.includes(walletId)) {
+    if (walletId !== null && (typeof walletId !== 'string' || !walletId)) throw new Error(`A carteira do movimento ${item.id} é inválida.`)
+    if (walletId && currentWalletIds && !currentWalletIds.includes(walletId)) {
       throw new Error(`A carteira do movimento ${item.id} não existe nos dados atuais.`)
     }
     if (kind === 'salary' && category !== 'Salário' || kind === 'extra' && category !== 'Renda extra' ||
