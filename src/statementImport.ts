@@ -14,7 +14,7 @@ const normalizeHeader = (value: string) =>
   value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR')
 
 type StatementIdentity = Pick<StatementEntry, 'date' | 'name' | 'amount'> &
-  Partial<Pick<StatementEntry, 'kind' | 'notes' | 'sourceId'>>
+  Partial<Pick<StatementEntry, 'notes' | 'sourceId'>> & { kind?: StatementEntry['kind'] | 'salary' }
 
 const normalizedTransactionName = (name: string) =>
   normalizeHeader(name.replace(/\b\d{9,16}\b/g, ' ')).replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
